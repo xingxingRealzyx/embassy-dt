@@ -194,7 +194,31 @@ cargo check --offline --target thumbv7em-none-eabihf \
 `Peri<'static, PB0>`，用于 ADC 采样这类需要把引脚交给驱动 API 的场景；
 `gpio ...: In` 加 `exti;` 属性后自动变成异步 `ExtiInput`（含中断绑定）。
 
+### 真机运行注意（时钟配置）
+
+所有示例现在都通过 `examples/common/clock.rs` 提供参考时钟配置：
+
+- H723：HSI + PLL1 → 400 MHz，HSI48（`sync_from_usb`）供 USB/RNG
+- F411：25 MHz HSE + PLL → 168 MHz，PLLQ 48 MHz 供 USB
+
+之前示例用 `init(Default::default())`，编译没问题但真机上 USB/RNG/SDMMC
+等外设时钟不对。不同板子请按实际晶振调整 `clock_config()`。
+目前全部示例只做过交叉编译验证，**尚未在真实硬件上烧录测试**。
+
+### 错误定位
+
+DTS 解析错误会带 文件:行:列：
+
+```text
+error: failed to load `boards/nucleo-h723zi.dts`:
+  dts: .../nucleo-h723zi.dts:9:19: unexpected token after `BROKEN` in node `led@0`
+```
+
 ## 发布到 crates.io
+
+工程状态：已初始化独立 git 仓库（含 LICENSE-MIT / LICENSE-APACHE），
+MSRV 已实测：核心与宏 **1.80**，STM32 后端 **1.88**（依赖链要求：
+edition2024、heapless 0.9、embassy-stm32 build.rs let-chains）。
 
 发布顺序（有依赖关系）：
 

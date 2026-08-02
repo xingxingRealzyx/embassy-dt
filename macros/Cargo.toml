@@ -2,7 +2,7 @@
 name = "embassy-dt-macros"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 description = "Procedural macros for embassy-dt: the device_tree! DSL."
 keywords = ["embassy", "embedded", "async", "device-tree", "macro"]

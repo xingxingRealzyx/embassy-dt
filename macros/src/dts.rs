@@ -323,8 +323,11 @@ enum Tok {
     Eof,
 }
 
+/// 词法输出：token 与每个 token 的 (行, 列)。
+type TokensWithSpans = (Vec<Tok>, Vec<(usize, usize)>);
+
 /// 词法分析：返回 token 与每个 token 的 (行, 列)（从 1 开始）。
-fn lex(text: &str, src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>)> {
+fn lex(text: &str, src: &str) -> Result<TokensWithSpans> {
     let mut toks = Vec::new();
     let mut spans = Vec::new();
     let b = text.as_bytes();
