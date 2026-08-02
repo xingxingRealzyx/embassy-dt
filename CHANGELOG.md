@@ -32,12 +32,17 @@
     （共享 I2C 用 `I2cDevice`、共享 SPI 用 `SpiDevice` + CS 引脚）
   - 时钟：`clock` 节点——v1 显式枚举 + v2 意图式（只写目标频率，
     按芯片自动计算 PLL；H7 PLL2 外设时钟；输入源 HSI/HSE/MSI 自动选择）
+  - G4 支持：意图式时钟（PLLR ≤ 170 MHz、>150 MHz 自动 boost、
+    HSI48/CRS 供 USB、ADC 内核走 SYS）、DMA 中断 `DMA1_CHANNELn`、
+    usb_v1（非 OTG）分支、adc_g4（带 `AdcConfig`）分支、
+    `adc12`/`fdcan`/`clk48` mux 覆盖属性
 
 ### STM32 后端（embassy-dt-stm32）
 
-- 芯片：STM32H723ZG（默认）、STM32F411CE、STM32L476RG
-- 板级 DTS：Nucleo-H723ZI、自定义 H723、BlackPill-F411、Nucleo-L476RG
-- 示例：29 个固件（对照 embassy 官方示例重写 + 驱动闭环演示）
+- 芯片：STM32H723ZG（默认）、STM32F411CE、STM32L476RG、STM32G474RE
+- 板级 DTS：Nucleo-H723ZI、自定义 H723、BlackPill-F411、Nucleo-L476RG、
+  Nucleo-G474RE（含 FDCAN 专用 overlay：I2C1→I2C2，PB8/PB9 让给 FDCAN1）
+- 示例：34 个固件（对照 embassy 官方示例重写 + 驱动闭环演示）
 
 ### 驱动（embassy-dt-bme280）
 

@@ -1,0 +1,90 @@
+// STM32G474 芯片级基础配置。
+//
+// 板级 .dts 通过 `#include "stm32g474.dtsi"` 复用本文件，再按需覆盖
+// 引脚 / DMA / 频率 —— 这就是「配置写一次，换板只改差异」的 overlay 语义。
+
+/ {
+    clock {
+        // 意图式：宏自动计算 PLL。
+        // PLL1 → 170 MHz 系统（>150M 自动开 boost）；HSI48 供 USB；
+        // ADC 内核走 SYS（驱动自动分频 ≤60 MHz）。
+        system = <170000000>;
+        usb = <48000000>;
+        adc = <60000000>;
+    };
+
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB8";
+        sda = "PB7";
+        dma-tx = "DMA1_CH1";
+        dma-rx = "DMA1_CH2";
+        frequency = <400000>;
+        shared; // 一条总线多个设备（I2cDevice 共享代理）
+    };
+
+    spi0: spi@40013000 {
+        compatible = "embassy-dt,bus-spi";
+        periph = "SPI1";
+        sck = "PA5";
+        mosi = "PA7";
+        miso = "PA6";
+        dma-tx = "DMA1_CH3";
+        dma-rx = "DMA1_CH4";
+        frequency = <1000000>;
+    };
+
+    uart0: uart@40004400 {
+        compatible = "embassy-dt,bus-uart";
+        periph = "USART2";
+        rx = "PA3";
+        tx = "PA2";
+        dma-tx = "DMA1_CH5";
+        dma-rx = "DMA1_CH6";
+        baud = <115200>;
+    };
+
+    led0: led@0 {
+        compatible = "embassy-dt,gpio-out";
+        pin = "PB0";
+        level = "high";
+    };
+
+    btn0: btn@1 {
+        compatible = "embassy-dt,gpio-in";
+        pin = "PC13";
+        pull = "down";
+        exti;
+    };
+
+    adc_in: adc-in@0 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PC0";
+    };
+
+    rng0: rng@50060800 {
+        compatible = "embassy-dt,periph-rng";
+        periph = "RNG";
+    };
+
+    adc0: adc@50000000 {
+        compatible = "embassy-dt,periph-adc";
+        periph = "ADC1";
+    };
+
+    pwm0: pwm@40000000 {
+        compatible = "embassy-dt,periph-pwm";
+        periph = "TIM2";
+        ch1 = "PA0";
+        ch2 = "PA1";
+        frequency = <1000>;
+    };
+
+    usb0: usb@40005c00 {
+        compatible = "embassy-dt,periph-usb";
+        periph = "USB";
+        dp = "PA12";
+        dm = "PA11";
+    };
+};

@@ -1,0 +1,26 @@
+/dts-v1/;
+#include "stm32g474.dtsi"
+
+/ {
+    model = "Nucleo-G474RE";
+    compatible = "st,nucleo-g474re";
+
+    // 演示板级覆盖：G474 Nucleo 的 LD3 在 PB0，且本板 LED 低电平点亮。
+    led0: led@0 {
+        level = "low";
+    };
+
+    bme280: bme@76 {
+        compatible = "bosch,bme280";
+        bus = <&i2c0>;
+        addr = <0x76>;
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
+    };
+
+    bme280b: bme@77 {
+        compatible = "bosch,bme280";
+        bus = <&i2c0>;
+        addr = <0x77>;
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
+    };
+};

@@ -21,6 +21,7 @@ default = ["stm32h723zg"]
 stm32h723zg = ["embassy-stm32/stm32h723zg"]
 stm32f411ce = ["embassy-stm32/stm32f411ce"]
 stm32l476rg = ["embassy-stm32/stm32l476rg"]
+stm32g474re = ["embassy-stm32/stm32g474re", "embassy-stm32/single-bank"]
 
 [dev-dependencies]
 cortex-m-rt = "0.7"
@@ -155,6 +156,26 @@ required-features = ["stm32l476rg"]
 [[example]]
 name = "l476_driver_bme280"
 required-features = ["stm32l476rg"]
+
+[[example]]
+name = "g474_nucleo"
+required-features = ["stm32g474re"]
+
+[[example]]
+name = "g474_driver_bme280"
+required-features = ["stm32g474re"]
+
+[[example]]
+name = "g474_embassy_can"
+required-features = ["stm32g474re"]
+
+[[example]]
+name = "g474_embassy_usb_serial"
+required-features = ["stm32g474re"]
+
+[[example]]
+name = "g474_embassy_adc"
+required-features = ["stm32g474re"]
 
 [[example]]
 name = "h723_embassy_spi_shared"

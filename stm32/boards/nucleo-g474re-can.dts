@@ -1,0 +1,22 @@
+/dts-v1/;
+#include "nucleo-g474re.dts"
+
+// FDCAN 演示板级 overlay：
+// G474RE（LQFP64）没有 PD0/PD1，FDCAN1 只能走 PA11/12（与 USB 冲突）
+// 或 PB8/9（与 Arduino 位置的 I2C1 冲突）。
+// 这里把 I2C1 移到 I2C2（PA9/PA8），把 PB8/PB9 让给 FDCAN1。
+
+/ {
+    i2c0: i2c@40005400 {
+        periph = "I2C2";
+        scl = "PA9";
+        sda = "PA8";
+    };
+
+    can0: can@40006400 {
+        compatible = "embassy-dt,periph-can";
+        periph = "FDCAN1";
+        rx = "PB8";
+        tx = "PB9";
+    };
+};

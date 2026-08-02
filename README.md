@@ -13,7 +13,7 @@
 embassy-dt/
 ├── src/            核心：TreeDesc / 节点 / 属性 / 拓扑排序 / 异步上线引擎
 ├── macros/         device_tree! 过程宏：DSL + DTS/DTSI 解析 + 编译期校验 + 后端代码生成
-├── stm32/          STM32 后端（embassy-dt-stm32）：H723ZG + F411CE + 3 个固件示例
+├── stm32/          STM32 后端（embassy-dt-stm32）：H723ZG + F411CE + L476RG + G474RE
 ├── examples/       宿主端 demo（DSL 与 DTS 两种入口）
 ```
 
@@ -190,13 +190,18 @@ FDCAN）与 F411（`adc_v2`/CRC 无 Config/bxCAN）会自动生成不同的代�
   该封装的 metapac 数据不含 RNG/DAC/CAN，因此示例只用到 ADC/CRC/PWM）
 - `stm32l476rg`（Nucleo-L476RG；低功耗系列，L4 的 DMA 通道固定映射、
   中断名为 `DMA1_CHANNELn`、USB 时钟用 MSI 48 MHz）
+- `stm32g474re`（Nucleo-G474RE；需要 `single-bank` 特性；DMA 中断同样叫
+  `DMA1_CHANNELn`；USB 是 usb_v1 非 OTG：`Driver::new` + HSI48/CRS；
+  ADC 是专用 adc_g4（`Adc::new(adc, AdcConfig)`），FDCAN 与 H723 同路径）
 
 意图式时钟按芯片自动规划：H7（HSI/HSE + PLL1/PLL2）、F4（HSE/HSI +
-PLL）、L4（HSI/HSE + PLL，系统走 PLLR ≤ 80 MHz）。
+PLL）、L4（HSI/HSE + PLL，系统走 PLLR ≤ 80 MHz）、G4（HSI/HSE + PLL，
+系统走 PLLR ≤ 170 MHz，>150 MHz 自动开 boost；USB 用 HSI48，ADC 内核
+时钟走 SYS 由驱动自动分频；`adc12`/`fdcan`/`clk48` 可显式覆盖 mux）。
 
-## 三块板子，一份应用代码
+## 四块板子，一份应用代码
 
-`stm32/examples/common/app.rs` 是唯一一份应用逻辑（心跳 LED），三块板子
+`stm32/examples/common/app.rs` 是唯一一份应用逻辑（心跳 LED），四块板子
 各自只有 `.dts` 差异：
 
 ```sh
@@ -205,7 +210,15 @@ cargo check --offline --target thumbv7em-none-eabihf --example h723_nucleo    # 
 cargo check --offline --target thumbv7em-none-eabihf --example h723_custom   # 自定义 H723 板（覆盖引脚 + USART3）
 cargo check --offline --target thumbv7em-none-eabihf \
     --no-default-features --features stm32f411ce --example f411_blackpill    # F411CE（换芯片家族）
+cargo check --offline --target thumbv7em-none-eabihf \
+    --no-default-features --features stm32l476rg --example l476_nucleo       # L476RG（换芯片家族）
+cargo check --offline --target thumbv7em-none-eabihf \
+    --no-default-features --features stm32g474re --example g474_nucleo       # G474RE（换芯片家族）
 ```
+
+G4 的 FDCAN 演示还用到了「板级 overlay 覆盖」：G474RE 封装没有 PD0/PD1，
+`boards/nucleo-g474re-can.dts` 把 I2C1 移到 I2C2（PA9/PA8），把 PB8/PB9
+让给 FDCAN1 —— 应用代码与 `h723_embassy_can` 逐行相同。
 
 ## 对照 embassy 官方示例（设备树风格重写）
 
@@ -233,6 +246,10 @@ cargo check --offline --target thumbv7em-none-eabihf \
 | `h723_embassy_pwm_input` / `f411_embassy_pwm_input` | `stm32f4/pwm_input.rs` | `board.pwm_in0` + `board.pwm_src`（`gpio ...: Pin` 做信号源） |
 | `f411_embassy_pwm_complementary` | `stm32f4/pwm_complementary.rs` | `board.pwm_adv0`（TIM1 互补 PWM） |
 | `h723_embassy_usb_hid_mouse` / `f411_embassy_usb_hid_mouse` | `stm32f4/usb_hid_mouse.rs` | `board.usb0` |
+| `g474_embassy_can` | `stm32g4/can.rs` | `board.can0`（FDCAN + I2C overlay） |
+| `g474_embassy_usb_serial` | `stm32g4/usb_serial.rs` | `board.usb0`（usb_v1 + HSI48/CRS） |
+| `g474_embassy_adc` | `stm32g4/adc.rs` | `board.adc0` + `board.adc_in` |
+| `g474_driver_bme280` | 驱动闭环 | `board.init_devices()`（与 H723/F411/L476 同一份应用） |
 
 ```sh
 cd stm32
