@@ -1,0 +1,71 @@
+/dts-v1/;
+
+/ {
+    model = "Nucleo-L476RG";
+    compatible = "st,nucleo-l476rg";
+
+    clock {
+        // L476：80 MHz 系统（PLLR），USB 用专属 HSI48。
+        system = <80000000>;
+        usb = <48000000>;
+    };
+
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB8";
+        sda = "PB9";
+        // L4 的 DMA 固定映射：I2C1 可用 DMA2_CH7/CH6，避开 USART2 的
+        // DMA1_CH6/CH7。
+        dma-tx = "DMA2_CH7";
+        dma-rx = "DMA2_CH6";
+        frequency = <400000>;
+        shared;
+    };
+
+    uart0: uart@40004400 {
+        compatible = "embassy-dt,bus-uart";
+        periph = "USART2";
+        rx = "PA3";
+        tx = "PA2";
+        dma-tx = "DMA1_CH7";
+        dma-rx = "DMA1_CH6";
+        baud = <115200>;
+    };
+
+    led0: led@0 {
+        compatible = "embassy-dt,gpio-out";
+        pin = "PA5";
+        level = "high";
+    };
+
+    btn0: btn@1 {
+        compatible = "embassy-dt,gpio-in";
+        pin = "PC13";
+        pull = "up";
+    };
+
+    rng0: rng@50060800 {
+        compatible = "embassy-dt,periph-rng";
+        periph = "RNG";
+    };
+
+    adc0: adc@40012000 {
+        compatible = "embassy-dt,periph-adc";
+        periph = "ADC1";
+    };
+
+    bme280: bme@76 {
+        compatible = "bosch,bme280";
+        bus = <&i2c0>;
+        addr = <0x76>;
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
+    };
+
+    bme280b: bme@77 {
+        compatible = "bosch,bme280";
+        bus = <&i2c0>;
+        addr = <0x77>;
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
+    };
+};

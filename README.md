@@ -171,6 +171,11 @@ FDCAN）与 F411（`adc_v2`/CRC 无 Config/bxCAN）会自动生成不同的代�
 - `stm32h723zg`（默认，Nucleo-H723ZI）
 - `stm32f411ce`（WeAct BlackPill；无 DMAMUX，DMA 通道固定映射；
   该封装的 metapac 数据不含 RNG/DAC/CAN，因此示例只用到 ADC/CRC/PWM）
+- `stm32l476rg`（Nucleo-L476RG；低功耗系列，L4 的 DMA 通道固定映射、
+  中断名为 `DMA1_CHANNELn`、USB 时钟用 MSI 48 MHz）
+
+意图式时钟按芯片自动规划：H7（HSI/HSE + PLL1/PLL2）、F4（HSE/HSI +
+PLL）、L4（HSI/HSE + PLL，系统走 PLLR ≤ 80 MHz）。
 
 ## 三块板子，一份应用代码
 

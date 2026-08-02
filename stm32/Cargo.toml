@@ -20,6 +20,7 @@ embassy-sync = "0.8"
 default = ["stm32h723zg"]
 stm32h723zg = ["embassy-stm32/stm32h723zg"]
 stm32f411ce = ["embassy-stm32/stm32f411ce"]
+stm32l476rg = ["embassy-stm32/stm32l476rg"]
 
 [dev-dependencies]
 cortex-m-rt = "0.7"
@@ -146,3 +147,11 @@ required-features = ["stm32h723zg"]
 [[example]]
 name = "f411_driver_bme280"
 required-features = ["stm32f411ce"]
+
+[[example]]
+name = "l476_nucleo"
+required-features = ["stm32l476rg"]
+
+[[example]]
+name = "l476_driver_bme280"
+required-features = ["stm32l476rg"]

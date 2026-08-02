@@ -614,6 +614,7 @@ fn validate(tree: &DslTree) -> Result<()> {
 /// 引脚 AF、DMA 兼容性、中断绑定全部由 embassy-stm32 的类型系统在编译期
 /// 保证（例如 `PB8` 若不是 `I2C1` 的合法 SCL 引脚，代码直接编译不过）。
 fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
+    let chip = chip_name(tree)?;
     let mut fields = Vec::new();
     let mut inits = Vec::new();
     // 模块级 static（如 USB 端点缓冲）。
@@ -635,8 +636,8 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                 let field = &node.id;
                 let shared = node.prop_bool("shared");
 
-                push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node)?;
-                push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node)?;
+                push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node, chip.as_deref())?;
+                push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node, chip.as_deref())?;
                 let ev_irq = format_ident!("{}_EV", periph.to_string());
                 let er_irq = format_ident!("{}_ER", periph.to_string());
                 push_binding(&mut bindings, ev_irq, quote! {
@@ -728,8 +729,8 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                     .map(|m| m == "slave")
                     .unwrap_or(false);
 
-                push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node)?;
-                push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node)?;
+                push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node, chip.as_deref())?;
+                push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node, chip.as_deref())?;
 
                 if is_slave {
                     let cs = node.pin_ident("cs")?;
@@ -786,8 +787,8 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                 push_binding(&mut bindings, periph.clone(), quote! {
                     ::embassy_stm32::usart::InterruptHandler<::embassy_stm32::peripherals::#periph>
                 });
-                push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node)?;
-                push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node)?;
+                push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node, chip.as_deref())?;
+                push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node, chip.as_deref())?;
 
                 fields.push(quote! {
                     pub #field: ::embassy_stm32::usart::Uart<'static, ::embassy_stm32::mode::Async>
@@ -904,7 +905,11 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                         match chip_name(tree)? {
                             // H723 是 adc_v3、F411 是 adc_v2：构造都是 `Adc::new(adc)`，
                             // 无中断绑定。v1（F1/F3/L4 等）需要 IRQ，暂不支持。
-                            Some(chip) if chip.contains("h723") || chip.contains("f411") => {
+                            Some(chip)
+                                if chip.contains("h723")
+                                    || chip.contains("f411")
+                                    || chip.contains("l476") =>
+                            {
                                 fields.push(quote! {
                                     pub #field: ::embassy_stm32::adc::Adc<'static, ::embassy_stm32::peripherals::#periph>
                                 });
@@ -940,7 +945,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                     ),
                                 });
                             }
-                            Some(chip) if chip.contains("f411") => {
+                            Some(chip) if chip.contains("f411") || chip.contains("l476") => {
                                 fields.push(quote! {
                                     pub #field: ::embassy_stm32::crc::Crc<'static>
                                 });
@@ -1168,7 +1173,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                         let buf_words =
                             node.prop_u32_any(&["buffer", "buf"]).unwrap_or(256) as usize;
                         let buf = format_ident!("{}_DMA_BUF", field.to_string());
-                        push_dma_bindings(&mut bindings, &dma_str, &dma, node)?;
+                        push_dma_bindings(&mut bindings, &dma_str, &dma, node, chip.as_deref())?;
                         fields.push(quote! {
                             pub #field: ::embassy_stm32::i2s::I2S<'static, u16>
                         });
@@ -1430,6 +1435,7 @@ fn clock_config_tokens(tree: &DslTree) -> Result<TokenStream2> {
     let stmts = match chip_name(tree)? {
         Some(chip) if chip.contains("h723") => h7_clock_config(clock)?,
         Some(chip) if chip.contains("f411") => f4_clock_config(clock)?,
+        Some(chip) if chip.contains("l476") => l4_clock_config(clock)?,
         _ => {
             return Err(syn::Error::new(
                 clock.id.span(),
@@ -1479,6 +1485,12 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
             })?;
             synth_f4_node(&plan)
         }
+        Some(chip) if chip.contains("l476") => {
+            let plan = plan_l4(sysclk, usb, hse).map_err(|msg| {
+                syn::Error::new(clock.id.span(), format!("clock: {msg}"))
+            })?;
+            synth_l4_node(&plan)
+        }
         _ => {
             return Err(syn::Error::new(
                 clock.id.span(),
@@ -1489,6 +1501,7 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
     let stmts = match chip_name(tree)? {
         Some(chip) if chip.contains("h723") => h7_clock_config(&node)?,
         Some(chip) if chip.contains("f411") => f4_clock_config(&node)?,
+        Some(chip) if chip.contains("l476") => l4_clock_config(&node)?,
         _ => unreachable!(),
     };
     Ok(quote! {
@@ -1874,6 +1887,107 @@ fn synth_f4_node(plan: &F4Plan) -> DslNode {
     }
 }
 
+#[derive(Debug)]
+struct L4Plan {
+    hse: Option<u32>,
+    prediv: u32,
+    mul: u32,
+    divr: u32,
+    usb48: bool,
+}
+
+/// STM32L4（L476）：HSI16 或 HSE 输入，PLL VCO 96–344 MHz，
+/// PLLM 1–8，PLLN 8–86，系统时钟走 PLLR ∈ {2,4,6,8}；
+/// SYSCLK ≤ 80 MHz；USB 48 MHz 用专属 HSI48（无需 PLLQ）。
+fn plan_l4(
+    sysclk: u32,
+    usb: Option<u32>,
+    hse: Option<u32>,
+) -> std::result::Result<L4Plan, String> {
+    if sysclk > 80_000_000 {
+        return Err(format!(
+            "system clock {sysclk} Hz exceeds L476 maximum (80 MHz)"
+        ));
+    }
+    if let Some(u) = usb {
+        if u != 48_000_000 {
+            return Err("only 48 MHz USB clock is supported".into());
+        }
+    }
+    let input = hse.unwrap_or(16_000_000) as u64;
+
+    let mut best: Option<(u64, u32, u32, u32)> = None;
+    for divr in [2u32, 4, 6, 8] {
+        let vco = sysclk as u64 * divr as u64;
+        if !(96_000_000..=344_000_000).contains(&vco) {
+            continue;
+        }
+        for prediv in 1u32..=8 {
+            let num = vco * prediv as u64;
+            if num % input != 0 {
+                continue;
+            }
+            let mul = num / input;
+            if (8..=86).contains(&mul) {
+                let cand = (vco, prediv, mul as u32, divr);
+                if best.as_ref().map_or(true, |b| cand.0 < b.0) {
+                    best = Some(cand);
+                }
+            }
+        }
+    }
+    let (_, prediv, mul, divr) = best
+        .ok_or_else(|| format!("cannot find a valid PLL config for {sysclk} Hz"))?;
+    Ok(L4Plan {
+        hse,
+        prediv,
+        mul,
+        divr,
+        usb48: usb.is_some(),
+    })
+}
+
+fn synth_l4_node(plan: &L4Plan) -> DslNode {
+    let mut props = vec![
+        prop(
+            "source",
+            PropValue::Str(LitStr::new(
+                if plan.hse.is_some() { "hse" } else { "hsi" },
+                Span::call_site(),
+            )),
+        ),
+        prop(
+            "pll",
+            PropValue::Array(vec![plan.prediv, plan.mul, plan.divr]),
+        ),
+        prop(
+            "sys",
+            PropValue::Str(LitStr::new("pll1_r", Span::call_site())),
+        ),
+        prop("ahb", PropValue::U32(LitInt::new("1", Span::call_site()))),
+        prop("apb1", PropValue::U32(LitInt::new("1", Span::call_site()))),
+        prop("apb2", PropValue::U32(LitInt::new("1", Span::call_site()))),
+    ];
+    if let Some(h) = plan.hse {
+        props.push(prop("hse", PropValue::U32(LitInt::new(&h.to_string(), Span::call_site()))));
+    }
+    if plan.usb48 {
+        // L4 的 HSI48 支持由 embassy 的 `crs` cfg 控制（L476 不可用），
+        // 用 MSI 48 MHz 作为 USB 时钟源。
+        props.push(prop(
+            "msi",
+            PropValue::Str(LitStr::new("48m", Span::call_site())),
+        ));
+    }
+    DslNode {
+        id: Ident::new("clock", Span::call_site()),
+        kind: NodeKindAst::Device,
+        driver: None,
+        props,
+        deps: Vec::new(),
+    }
+}
+
 fn prop(key: &str, value: PropValue) -> DslProp {
     DslProp {
         key: Ident::new(key, Span::call_site()),
@@ -2194,11 +2308,139 @@ fn f4_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
     Ok(stmts)
 }
 
-/// 把 `"DMA1_CH0"` 这类通道名转成对应的中断名（H7/F4 风格 `DMA1_STREAM0`）；
-/// 若通道名已经是 `DMA1_STREAMn` 则原样使用。
-fn stream_irq(channel: &str, node: &DslNode) -> Result<Ident> {
-    let irq = if channel.contains("_STREAM") {
+fn l4_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
+    let mut stmts = Vec::new();
+
+    if let Some(source) = node.prop_str_opt("source")? {
+        if source == "hsi" {
+            // L4 的 HSI 是布尔开关（PLL 源在 `pll.source` 里指定）。
+            stmts.push(quote! { config.rcc.hsi = true; });
+        }
+    }
+    if let Some(hse) = node.prop_u32_any(&["hse"]) {
+        let mode = match node.prop_str_opt("hse-mode")?.as_deref() {
+            None | Some("oscillator") => quote!(Oscillator),
+            Some("bypass") => quote!(Bypass),
+            Some(other) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `hse-mode` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.hse = Some(::embassy_stm32::rcc::Hse {
+                freq: ::embassy_stm32::time::Hertz(#hse),
+                mode: ::embassy_stm32::rcc::HseMode::#mode,
+            });
+        });
+    }
+    if let Some(pll) = node.prop_array("pll") {
+        // L4：<prediv mul divr>（系统时钟走 PLLR）。
+        if pll.len() < 3 {
+            return Err(syn::Error::new(
+                node.id.span(),
+                "clock: `pll` needs <prediv mul divr> on L4",
+            ));
+        }
+        let pre = format_ident!("DIV{}", pll[0]);
+        let mul = format_ident!("MUL{}", pll[1]);
+        let divr = format_ident!("DIV{}", pll[2]);
+        let src = match node.prop_str_opt("source")?.as_deref() {
+            None | Some("hsi") => quote!(HSI),
+            Some("hse") => quote!(HSE),
+            Some("msi") => quote!(MSI),
+            Some(other) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `source` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.pll = Some(::embassy_stm32::rcc::Pll {
+                source: ::embassy_stm32::rcc::PllSource::#src,
+                prediv: ::embassy_stm32::rcc::PllPreDiv::#pre,
+                mul: ::embassy_stm32::rcc::PllMul::#mul,
+                divp: None,
+                divq: None,
+                divr: Some(::embassy_stm32::rcc::PllRDiv::#divr),
+            });
+        });
+    }
+    if let Some(sys) = node.prop_str_opt("sys")? {
+        let v = match sys.as_str() {
+            "msi" => quote!(MSI),
+            "hsi" => quote!(HSI),
+            "hse" => quote!(HSE),
+            "pll1_r" => quote!(PLL1_R),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `sys` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.sys = ::embassy_stm32::rcc::Sysclk::#v; });
+    }
+    if let Some(n) = node.prop_u32_any(&["ahb"]) {
+        let v = format_ident!("DIV{}", n);
+        stmts.push(quote! { config.rcc.ahb_pre = ::embassy_stm32::rcc::AHBPrescaler::#v; });
+    }
+    for key in ["apb1", "apb2"] {
+        if let Some(n) = node.prop_u32_any(&[key]) {
+            let field = format_ident!("{}_pre", key);
+            let v = format_ident!("DIV{}", n);
+            stmts.push(quote! { config.rcc.#field = ::embassy_stm32::rcc::APBPrescaler::#v; });
+        }
+    }
+    if node.prop_bool("hsi48") {
+        stmts.push(quote! {
+            config.rcc.hsi48 = Some(::embassy_stm32::rcc::Hsi48Config::default());
+        });
+    }
+    if let Some(msi) = node.prop_str_opt("msi")? {
+        let v = match msi.as_str() {
+            "48m" => quote!(RANGE48M),
+            "24m" => quote!(RANGE24M),
+            "16m" => quote!(RANGE16M),
+            "4m" => quote!(RANGE4M),
+            "2m" => quote!(RANGE2M),
+            "1m" => quote!(RANGE1M),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `msi` range `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.msi = Some(::embassy_stm32::rcc::MSIRange::#v); });
+    }
+    if let Some(voltage) = node.prop_str_opt("voltage")? {
+        let v = match voltage.as_str() {
+            "range1" => quote!(RANGE1),
+            "range2" => quote!(RANGE2),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `voltage` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.voltage_scale = ::embassy_stm32::rcc::VoltageScale::#v; });
+    }
+    Ok(stmts)
+}
+
+/// 把 `"DMA1_CH0"` 这类通道名转成对应的中断名。
+/// - H7/F4：`DMA1_CH0` → `DMA1_STREAM0`
+/// - L4：中断就叫 `DMA1_CH0`（embassy 统一命名）
+fn stream_irq(channel: &str, node: &DslNode, chip: Option<&str>) -> Result<Ident> {
+    let irq = if channel.contains("_STREAM") || channel.contains("_CHANNEL") {
         channel.to_string()
+    } else if chip.map(|c| c.contains("l4")).unwrap_or(false) {
+        // L4：通道类型 `DMA1_CH1`，中断名 `DMA1_CHANNEL1`。
+        channel.replace("_CH", "_CHANNEL")
     } else if channel.contains("_CH") {
         channel.replace("_CH", "_STREAM")
     } else {
@@ -2222,8 +2464,9 @@ fn push_dma_bindings(
     channel: &str,
     channel_ident: &Ident,
     node: &DslNode,
+    chip: Option<&str>,
 ) -> Result<()> {
-    push_binding(bindings, stream_irq(channel, node)?, quote! {
+    push_binding(bindings, stream_irq(channel, node, chip)?, quote! {
         ::embassy_stm32::dma::InterruptHandler<::embassy_stm32::peripherals::#channel_ident>
     });
     Ok(())
@@ -2483,6 +2726,29 @@ mod tests {
         assert_eq!((p.prediv, p.mul, p.divp), (2, 16, 2));
         assert!(!p.usb48);
         assert!(p.source_hse);
+    }
+
+    #[test]
+    fn intent_l4_80mhz_hsi() {
+        // HSI16：VCO=160M（divr=2），prediv=1, mul=10。
+        let p = plan_l4(80_000_000, Some(48_000_000), None).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divr), (1, 10, 2));
+        assert!(p.usb48);
+        assert!(p.hse.is_none());
+    }
+
+    #[test]
+    fn intent_l4_80mhz_hse() {
+        // 8 MHz 晶振：VCO=160M，prediv=1, mul=20。
+        let p = plan_l4(80_000_000, None, Some(8_000_000)).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divr), (1, 20, 2));
+        assert_eq!(p.hse, Some(8_000_000));
+    }
+
+    #[test]
+    fn intent_l4_rejects_overclock() {
+        let err = plan_l4(100_000_000, None, None).unwrap_err();
+        assert!(err.contains("80 MHz"));
     }
 #[cfg(test)]
 fn clock_node(props: &[(&str, PropValue)]) -> DslNode {
