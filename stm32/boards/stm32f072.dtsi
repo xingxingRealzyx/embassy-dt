@@ -1,0 +1,88 @@
+// STM32F072RB 芯片级基础配置。
+//
+// F0 的特殊性：
+// - Cortex-M0，最大 48 MHz；PLL 源 HSI 8M 不需要 ÷2（与 F1 不同）；
+// - USB 由专属 HSI48/CRS 提供（不依赖 PLL，比 F1 简单）；
+//   F072 的 USB 中断是独立向量 `USB`（可与 CAN 共存）；
+// - CAN 的 TX/RX0/RX1/SCE 全部合并到 CEC_CAN 向量（四个 handler 绑同一行）；
+// - DMA 中断是组向量：DMA1_CHANNEL1 / DMA1_CHANNEL2_3 /
+//   DMA1_CHANNEL4_5_6_7（组内通道共享向量，生成器自动合并 handler）；
+// - I2C 是单中断（I2C1），EXTI 是 EXTI0_1/EXTI2_3/EXTI4_15；
+// - 无 AFIO（引脚无 remap 歧义）；无 APB2 分频；ADC 是 adc_v1
+//   （`Adc::new(adc, irq)`，时钟走内部 HSI14，无需额外配置）。
+
+/ {
+    clock {
+        // 意图式：HSI 8M ÷1 ×6 = 48 MHz；USB 用 HSI48/CRS。
+        system = <48000000>;
+        usb = <48000000>;
+    };
+
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB8";
+        sda = "PB9";
+        // F0 固定映射：I2C1 TX=CH6 / RX=CH7（同一 DMA 组向量，
+        // 生成器自动把两个 handler 合并到 DMA1_CHANNEL4_5_6_7 一行）。
+        dma-tx = "DMA1_CH6";
+        dma-rx = "DMA1_CH7";
+        frequency = <400000>;
+        shared; // 一条总线多个设备（I2cDevice 共享代理）
+    };
+
+    uart0: uart@40013800 {
+        compatible = "embassy-dt,bus-uart";
+        periph = "USART1";
+        rx = "PA10";
+        tx = "PA9";
+        // F0 固定映射：USART1 TX=CH2 / RX=CH3（同一 DMA 组向量，
+        // 与 I2C1 的 CH6/CH7 分属不同组）。
+        dma-tx = "DMA1_CH2";
+        dma-rx = "DMA1_CH3";
+        baud = <115200>;
+    };
+
+    led0: led@0 {
+        compatible = "embassy-dt,gpio-out";
+        pin = "PA5";
+        level = "high";
+    };
+
+    btn0: btn@1 {
+        compatible = "embassy-dt,gpio-in";
+        pin = "PC13";
+        pull = "down";
+        exti;
+    };
+
+    adc_in: adc-in@0 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PA0";
+    };
+
+    adc0: adc@40012400 {
+        compatible = "embassy-dt,periph-adc";
+        periph = "ADC1";
+    };
+
+    pwm0: pwm@40000400 {
+        compatible = "embassy-dt,periph-pwm";
+        periph = "TIM3";
+        ch1 = "PA6";
+        ch2 = "PA7";
+        frequency = <1000>;
+    };
+
+    usb0: usb@40005c00 {
+        compatible = "embassy-dt,periph-usb";
+        periph = "USB";
+        dp = "PA12";
+        dm = "PA11";
+    };
+
+    crc0: crc@40023000 {
+        compatible = "embassy-dt,periph-crc";
+        periph = "CRC";
+    };
+};

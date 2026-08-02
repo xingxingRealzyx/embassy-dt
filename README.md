@@ -13,7 +13,7 @@
 embassy-dt/
 ├── src/            核心：TreeDesc / 节点 / 属性 / 拓扑排序 / 异步上线引擎
 ├── macros/         device_tree! 过程宏：DSL + DTS/DTSI 解析 + 编译期校验 + 后端代码生成
-├── stm32/          STM32 后端（embassy-dt-stm32）：H7/F4/L4/G4/F1 五大系列
+├── stm32/          STM32 后端（embassy-dt-stm32）：H7/F4/L4/G4/F1/F0 六大系列
 ├── examples/       宿主端 demo（DSL 与 DTS 两种入口）
 ```
 
@@ -196,6 +196,9 @@ FDCAN）与 F411（`adc_v2`/CRC 无 Config/bxCAN）会自动生成不同的代�
 - `stm32f103c8`（BluePill；中容量：无 CAN/RNG/DAC，DMA 通道固定映射、
   AFIO 引脚重映射、USB 与 CAN1 共享中断向量、ADC 需要 ADC1_2 中断）
 - `stm32f103re`（Nucleo-F103RB；高容量：有 bxCAN（外设名 `CAN`）与 DAC）
+- `stm32f072rb`（Nucleo-F072RB；第一个 Cortex-M0；USB 中断独立（`USB`）、
+  CAN 合并到 CEC_CAN、DMA/EXTI/I2C 都是组向量或单中断——生成器自动把
+  同一向量的多个 handler 合并到一行）
 
 意图式时钟按芯片自动规划：H7（HSI/HSE + PLL1/PLL2）、F4（HSE/HSI +
 PLL）、L4（HSI/HSE + PLL，系统走 PLLR ≤ 80 MHz）、G4（HSI/HSE + PLL，
@@ -203,11 +206,13 @@ PLL）、L4（HSI/HSE + PLL，系统走 PLLR ≤ 80 MHz）、G4（HSI/HSE + PLL�
 时钟走 SYS 由驱动自动分频；`adc12`/`fdcan`/`clk48` 可显式覆盖 mux）、
 F1（HSI 8M÷2 或 HSE，PLLMUL 2–16 直接输出 SYSCLK ≤ 72 MHz；USB 只能
 在 PLL=72/48 MHz 时才有 48 MHz，因此请求 USB 时 SYSCLK 必须是 72 MHz
-（需 HSE）或 48 MHz；ADC 时钟 = PCLK2÷adc_pre ≤ 14 MHz）。
+（需 HSE）或 48 MHz；ADC 时钟 = PCLK2÷adc_pre ≤ 14 MHz）、
+F0（HSI 8M 无需 ÷2，PLL 直接输出 ≤ 48 MHz；USB 由专属 HSI48/CRS 提供，
+不依赖 PLL——比 F1 简单）。
 
-## 五块板子，一份应用代码
+## 六块板子，一份应用代码
 
-`stm32/examples/common/app.rs` 是唯一一份应用逻辑（心跳 LED），五块板子
+`stm32/examples/common/app.rs` 是唯一一份应用逻辑（心跳 LED），六块板子
 各自只有 `.dts` 差异：
 
 ```sh
@@ -224,6 +229,8 @@ cargo check --offline --target thumbv7em-none-eabihf \
     --no-default-features --features stm32f103c8 --example f103_bluepill      # F103C8（换芯片家族）
 cargo check --offline --target thumbv7em-none-eabihf \
     --no-default-features --features stm32f103re --example f103_embassy_can  # F103RE（bxCAN 示例）
+cargo check --offline --target thumbv7em-none-eabihf \
+    --no-default-features --features stm32f072rb --example f072_nucleo       # F072RB（Cortex-M0）
 ```
 
 F1 的两个「板级 overlay」演示：
@@ -233,8 +240,13 @@ F1 的两个「板级 overlay」演示：
 - F103 的 USB 与 CAN1 共享中断向量（`USB_LP_CAN1_RX0`），
   `boards/nucleo-f103rb.dts` 用 `/delete-node/` 删掉 usb0 和 spi0
   （LD2 占用 PA5），把 PB8/PB9 给 CAN1；
+- F072 的 USB 中断（`USB`）与 CAN（`CEC_CAN`）是独立向量、可以共存，
+  `boards/nucleo-f072rb-can.dts` 只把 I2C1 挪到 I2C2（PB10/PB11），
+  PB8/PB9 让给 CAN；
 - F1 的 AFIO 引脚可能同时实现多个 remap 候选（如 PA0 同时是 TIM2_CH1 的
-  `AfioRemap<0>` 和 `<2>`），生成代码显式选择默认 remap 0。
+  `AfioRemap<0>` 和 `<2>`），生成代码显式选择默认 remap 0；
+- F0 的 DMA 中断是组向量（`DMA1_CHANNEL4_5_6_7` 等），同组多个通道的
+  handler 由生成器合并到同一个 `bind_interrupts` 行。
 
 ## 对照 embassy 官方示例（设备树风格重写）
 
@@ -270,6 +282,10 @@ F1 的两个「板级 overlay」演示：
 | `f103_embassy_usb_serial` | `stm32f1/usb_serial.rs` | `board.usb0`（usb_v1，PLL 72M÷1.5 派生 48M） |
 | `f103_embassy_adc` | `stm32f1/adc.rs` | `board.adc0` + `board.adc_in`（async `read`，无 blocking） |
 | `f103_driver_bme280` | 驱动闭环 | `board.init_devices()`（F1 固定 DMA 映射 I2C1=CH6/7） |
+| `f072_embassy_can` | `stm32f0/can.rs` | `board.can0`（bxCAN，CEC_CAN 合并中断，与 USB 共存） |
+| `f072_embassy_usb_serial` | `stm32f0/usb_serial.rs` | `board.usb0`（usb_v1 + HSI48/CRS） |
+| `f072_embassy_adc` | `stm32f0/adc.rs` | `board.adc0` + `board.adc_in`（adc_v1，HSI14 时钟） |
+| `f072_driver_bme280` | 驱动闭环 | `board.init_devices()`（F0 固定 DMA 映射 I2C1=CH6/7） |
 
 ```sh
 cd stm32

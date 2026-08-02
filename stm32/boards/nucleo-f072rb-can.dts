@@ -1,0 +1,26 @@
+/dts-v1/;
+#include "nucleo-f072rb.dts"
+
+// CAN 演示板级 overlay：
+// F072 的 USB 中断（`USB`）与 CAN（`CEC_CAN`）是独立向量，可以共存；
+// 只是引脚冲突：CAN 默认在 PB8/PB9（I2C1 占用）或 PA11/PA12（USB 占用）。
+// 这里把 I2C1 挪到 I2C2（PB10/PB11），把 PB8/PB9 让给 CAN，USB 保留。
+
+/ {
+    i2c0: i2c@40005400 {
+        periph = "I2C2";
+        scl = "PB10";
+        sda = "PB11";
+        // F0 固定映射：I2C2 TX=CH4 / RX=CH5。
+        dma-tx = "DMA1_CH4";
+        dma-rx = "DMA1_CH5";
+    };
+
+    can0: can@40006400 {
+        compatible = "embassy-dt,periph-can";
+        // F0 的 bxCAN 外设名是 `CAN`，四个中断合并到 CEC_CAN。
+        periph = "CAN";
+        rx = "PB8";
+        tx = "PB9";
+    };
+};

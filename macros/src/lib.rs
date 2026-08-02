@@ -638,8 +638,23 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
 
                 push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node, chip.as_deref())?;
                 push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node, chip.as_deref())?;
-                let ev_irq = format_ident!("{}_EV", periph.to_string());
-                let er_irq = format_ident!("{}_ER", periph.to_string());
+                // F0 的 I2C 是单中断（I2C1），EV/ER 共享同一向量；
+                // 其它家族是 I2C1_EV / I2C1_ER 两个向量。
+                let f0 = chip
+                    .as_deref()
+                    .map(|c| c.contains("f0"))
+                    .unwrap_or(false);
+                let irq_base = periph.to_string();
+                let ev_irq = if f0 {
+                    format_ident!("{}", irq_base)
+                } else {
+                    format_ident!("{}_EV", irq_base)
+                };
+                let er_irq = if f0 {
+                    format_ident!("{}", irq_base)
+                } else {
+                    format_ident!("{}_ER", irq_base)
+                };
                 push_binding(&mut bindings, ev_irq, quote! {
                     ::embassy_stm32::i2c::EventInterruptHandler<::embassy_stm32::peripherals::#periph>
                 });
@@ -892,7 +907,11 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                         };
                         if node.prop_bool("exti") {
                             // 异步输入：EXTI 中断驱动（Wait trait）。
-                            let (ch, irq, tl) = exti_info(&pin.to_string())?;
+                            let f0 = chip
+                                .as_deref()
+                                .map(|c| c.contains("f0"))
+                                .unwrap_or(false);
+                            let (ch, irq, tl) = exti_info(&pin.to_string(), f0)?;
                             push_binding(&mut bindings, irq, quote! {
                                 ::embassy_stm32::exti::InterruptHandler<::embassy_stm32::interrupt::typelevel::#tl>
                             });
@@ -985,10 +1004,27 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                     #field: ::embassy_stm32::adc::Adc::new(p.#periph),
                                 });
                             }
+                            Some(chip) if chip.contains("f091") || chip.contains("f0") => {
+                                // F0 是 adc_v1：`Adc::new(adc, irq)`，
+                                // ADC1 与比较器共享 ADC1_COMP 向量。
+                                push_binding(
+                                    &mut bindings,
+                                    Ident::new("ADC1_COMP", Span::call_site()),
+                                    quote! {
+                                    ::embassy_stm32::adc::InterruptHandler<::embassy_stm32::peripherals::#periph>
+                                    },
+                                );
+                                fields.push(quote! {
+                                    pub #field: ::embassy_stm32::adc::Adc<'static, ::embassy_stm32::peripherals::#periph>
+                                });
+                                inits.push(quote! {
+                                    #field: ::embassy_stm32::adc::Adc::new(p.#periph, DtIrqs),
+                                });
+                            }
                             _ => {
                                 return Err(syn::Error::new(
                                     node.id.span(),
-                                    "stm32 backend: `adc` is not supported for this chip (supported: stm32h723zg / stm32f411ce / stm32l476rg / stm32g474re / stm32f103c8)",
+                                    "stm32 backend: `adc` is not supported for this chip (supported: stm32h723zg / stm32f411ce / stm32l476rg / stm32g474re / stm32f103c8 / stm32f091rc)",
                                 ))
                             }
                         }
@@ -1017,13 +1053,33 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                 if chip.contains("f411")
                                     || chip.contains("l476")
                                     || chip.contains("f103")
-                                    || chip.contains("f1") =>
+                                    || chip.contains("f1")
+                                =>
                             {
                                 fields.push(quote! {
                                     pub #field: ::embassy_stm32::crc::Crc<'static>
                                 });
                                 inits.push(quote! {
                                     #field: ::embassy_stm32::crc::Crc::new(p.#periph),
+                                });
+                            }
+                            Some(chip) if chip.contains("f0") => {
+                                // F0（F072）的 CRC 是 v3：`Crc::new(adc, config)`。
+                                fields.push(quote! {
+                                    pub #field: ::embassy_stm32::crc::Crc<'static>
+                                });
+                                inits.push(quote! {
+                                    #field: ::embassy_stm32::crc::Crc::new(
+                                        p.#periph,
+                                        ::embassy_stm32::crc::Config::new(
+                                            ::embassy_stm32::crc::InputReverseConfig::None,
+                                            false,
+                                            ::embassy_stm32::crc::PolySize::Width32,
+                                            0xFFFF_FFFF,
+                                            0x04C1_1DB7,
+                                        )
+                                        .expect("embassy-dt: invalid CRC config"),
+                                    ),
                                 });
                             }
                             _ => {
@@ -1095,27 +1151,41 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                     .into_normal_mode(),
                                 });
                             }
-                            Some(chip) if chip.contains("f4") || chip.contains("f1") => {
-                                // F1 的 CAN 中断与 USB 共享向量：TX=USB_HP_CAN1_TX、
-                                // RX0=USB_LP_CAN1_RX0（因此 USB 与 CAN 不能同树）。
+                            Some(chip)
+                                if chip.contains("f4") || chip.contains("f1") || chip.contains("f0") =>
+                            {
+                                // F1/F0 的 CAN 中断与 USB 共享向量（因此 USB 与 CAN 不能同树）。
+                                // F1 带数字：USB_HP_CAN1_TX / USB_LP_CAN1_RX0 / CAN1_RX1 / CAN1_SCE；
+                                // F0 不带：USB_HP_CAN_TX / USB_LP_CAN_RX0 / CAN_RX1 / CAN_SCE。
                                 let f1 = chip.contains("f1");
+                                let f0 = chip.contains("f0");
+                                // F0：CAN 的 TX/RX0/RX1/SCE 全部合并到 CEC_CAN 向量，
+                                // 四个 handler 绑在同一行（bind_interrupts 多 handler 语法）。
                                 let tx_irq = if f1 {
                                     Ident::new("USB_HP_CAN1_TX", Span::call_site())
+                                } else if f0 {
+                                    Ident::new("CEC_CAN", Span::call_site())
                                 } else {
                                     format_ident!("{}_TX", periph.to_string())
                                 };
                                 let rx0 = if f1 {
                                     Ident::new("USB_LP_CAN1_RX0", Span::call_site())
+                                } else if f0 {
+                                    Ident::new("CEC_CAN", Span::call_site())
                                 } else {
                                     format_ident!("{}_RX0", periph.to_string())
                                 };
                                 let rx1 = if f1 {
                                     Ident::new("CAN1_RX1", Span::call_site())
+                                } else if f0 {
+                                    Ident::new("CEC_CAN", Span::call_site())
                                 } else {
                                     format_ident!("{}_RX1", periph.to_string())
                                 };
                                 let sce = if f1 {
                                     Ident::new("CAN1_SCE", Span::call_site())
+                                } else if f0 {
+                                    Ident::new("CEC_CAN", Span::call_site())
                                 } else {
                                     format_ident!("{}_SCE", periph.to_string())
                                 };
@@ -1154,11 +1224,15 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                             node.prop_u32_any(&["ep_out", "ep_out_buf"]).unwrap_or(256) as usize;
                         let ep_buf = format_ident!("{}_EP_BUF", field.to_string());
                         let periph_str = periph.to_string();
-                        // G4/F1 的 USB 是 usb_v1（非 OTG）：外设 `USB`。
-                        // G4 中断 `USB_LP`；F103 是合并向量 `USB_LP_CAN1_RX0`。
+                        // G4/F1/F0 的 USB 是 usb_v1（非 OTG）：外设 `USB`。
+                        // G4 中断 `USB_LP`；F103 合并向量 `USB_LP_CAN1_RX0`；
+                        // F0 合并向量 `USB_LP_CAN_RX0`（无数字）。
                         // OTG 芯片的外设名是 `USB_OTG_FS/HS`，中断同名。
                         let irq_name = if chip.as_deref().map(|c| c.contains("f1")).unwrap_or(false) {
                             "USB_LP_CAN1_RX0".to_string()
+                        } else if chip.as_deref().map(|c| c.contains("f0")).unwrap_or(false) {
+                            // F072 的 USB 中断是独立向量 `USB`（不与 CAN 合并）。
+                            periph_str.clone()
                         } else if chip.as_deref().map(|c| c.contains("g4")).unwrap_or(false) {
                             format!("{}_LP", periph_str)
                         } else {
@@ -1205,7 +1279,11 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                     },
                                 });
                             }
-                            Some(chip) if chip.contains("g4") || chip.contains("f1") => {
+                            Some(chip)
+                                if chip.contains("g4")
+                                    || chip.contains("f1")
+                                    || chip.contains("f0") =>
+                            {
                                 // usb_v1：无需端点缓冲，非 unsafe，无 SOF 引脚。
                                 inits.push(quote! {
                                     #field: ::embassy_stm32::usb::Driver::new(
@@ -1216,7 +1294,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                             _ => {
                                 return Err(syn::Error::new(
                                     node.id.span(),
-                                    "stm32 backend: `usb` is not supported for this chip (declare `chip \"stm32h723zg\"` / `chip \"stm32f411ce\"` / `chip \"stm32g474re\"` / `chip \"stm32f103c8\"`)",
+                                    "stm32 backend: `usb` is not supported for this chip (declare `chip \"stm32h723zg\"` / `chip \"stm32f411ce\"` / `chip \"stm32g474re\"` / `chip \"stm32f103c8\"` / `chip \"stm32f091rc\"`)",
                                 ))
                             }
                         }
@@ -1624,6 +1702,9 @@ fn clock_config_tokens(tree: &DslTree) -> Result<TokenStream2> {
         Some(chip) if chip.contains("f103") || chip.contains("f1") => {
             f1_clock_config(clock)?
         }
+        Some(chip) if chip.contains("f091") || chip.contains("f0") => {
+            f0_clock_config(clock)?
+        }
         _ => {
             return Err(syn::Error::new(
                 clock.id.span(),
@@ -1691,6 +1772,12 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
             })?;
             synth_f1_node(&plan)
         }
+        Some(chip) if chip.contains("f091") || chip.contains("f0") => {
+            let plan = plan_f0(sysclk, usb, hse).map_err(|msg| {
+                syn::Error::new(clock.id.span(), format!("clock: {msg}"))
+            })?;
+            synth_f0_node(&plan)
+        }
         _ => {
             return Err(syn::Error::new(
                 clock.id.span(),
@@ -1705,6 +1792,9 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
         Some(chip) if chip.contains("g4") => g4_clock_config(&node)?,
         Some(chip) if chip.contains("f103") || chip.contains("f1") => {
             f1_clock_config(&node)?
+        }
+        Some(chip) if chip.contains("f091") || chip.contains("f0") => {
+            f0_clock_config(&node)?
         }
         _ => unreachable!(),
     };
@@ -2454,6 +2544,107 @@ fn synth_f1_node(plan: &F1Plan) -> DslNode {
     }
 }
 
+#[derive(Debug)]
+struct F0Plan {
+    hse: Option<u32>,
+    prediv: u32,
+    mul: u32,
+    usb48: bool,
+}
+
+/// STM32F0（F091RC）：HSI 8 MHz 或 HSE（4–32 MHz）输入，
+/// PLL 结构与 F1 类似但更自由：`PLL = 源 / prediv × mul`
+/// （PREDIV 1–16，HSI 不需要强制 ÷2），SYSCLK ≤ 48 MHz。
+///
+/// USB 特殊性：F0 的 USB 不走 PLL（不像 F1），
+/// 由专属 HSI48（CRS 同步）直接提供 48 MHz。
+fn plan_f0(
+    sysclk: u32,
+    usb: Option<u32>,
+    hse: Option<u32>,
+) -> std::result::Result<F0Plan, String> {
+    if sysclk > 48_000_000 {
+        return Err(format!(
+            "system clock {sysclk} Hz exceeds F091 maximum (48 MHz)"
+        ));
+    }
+    if let Some(u) = usb {
+        if u != 48_000_000 {
+            return Err("only 48 MHz USB clock is supported".into());
+        }
+    }
+    if let Some(h) = hse {
+        if !(4_000_000..=32_000_000).contains(&h) {
+            return Err(format!("HSE frequency {h} Hz out of range (4–32 MHz)"));
+        }
+    }
+    let input = hse.unwrap_or(8_000_000) as u64;
+
+    let mut best: Option<(u32, u32)> = None;
+    for prediv in 1u32..=16 {
+        let in_freq = input / prediv as u64;
+        if !(1_000_000..=24_000_000).contains(&in_freq) {
+            continue;
+        }
+        if sysclk as u64 % in_freq != 0 {
+            continue;
+        }
+        let mul = sysclk as u64 / in_freq;
+        let out = in_freq * mul;
+        if best.is_none()
+            && (2..=16).contains(&mul)
+            && (16_000_000..=48_000_000).contains(&out)
+        {
+            best = Some((prediv, mul as u32));
+        }
+    }
+    let (prediv, mul) = best
+        .ok_or_else(|| format!("cannot find a valid PLL config for {sysclk} Hz"))?;
+    Ok(F0Plan {
+        hse,
+        prediv,
+        mul,
+        usb48: usb.is_some(),
+    })
+}
+
+fn synth_f0_node(plan: &F0Plan) -> DslNode {
+    let mut props = vec![
+        prop(
+            "source",
+            PropValue::Str(LitStr::new(
+                if plan.hse.is_some() { "hse" } else { "hsi" },
+                Span::call_site(),
+            )),
+        ),
+        prop(
+            "pll",
+            PropValue::Array(vec![plan.prediv, plan.mul]),
+        ),
+        prop(
+            "sys",
+            PropValue::Str(LitStr::new("pll1_p", Span::call_site())),
+        ),
+        prop("ahb", PropValue::U32(LitInt::new("1", Span::call_site()))),
+        prop("apb1", PropValue::U32(LitInt::new("1", Span::call_site()))),
+    ];
+    if let Some(h) = plan.hse {
+        props.push(prop("hse", PropValue::U32(LitInt::new(&h.to_string(), Span::call_site()))));
+    }
+    if plan.usb48 {
+        // F0 的 USB 时钟 = HSI48（CRS 同步 USB SOF），无需 PLL 配合。
+        props.push(prop("hsi48", PropValue::Bool(true)));
+        props.push(prop("hsi48_sync", PropValue::Bool(true)));
+    }
+    DslNode {
+        id: Ident::new("clock", Span::call_site()),
+        kind: NodeKindAst::Device,
+        driver: None,
+        props,
+        deps: Vec::new(),
+    }
+}
+
 fn prop(key: &str, value: PropValue) -> DslProp {
     DslProp {
         key: Ident::new(key, Span::call_site()),
@@ -3127,14 +3318,128 @@ fn f1_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
     Ok(stmts)
 }
 
+fn f0_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
+    let mut stmts = Vec::new();
+
+    if let Some(source) = node.prop_str_opt("source")? {
+        if source == "hsi" {
+            stmts.push(quote! { config.rcc.hsi = true; });
+        }
+    }
+    if let Some(hse) = node.prop_u32_any(&["hse"]) {
+        let mode = match node.prop_str_opt("hse_mode")?.as_deref() {
+            None | Some("oscillator") => quote!(Oscillator),
+            Some("bypass") => quote!(Bypass),
+            Some(other) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `hse-mode` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.hse = Some(::embassy_stm32::rcc::Hse {
+                freq: ::embassy_stm32::time::Hertz(#hse),
+                mode: ::embassy_stm32::rcc::HseMode::#mode,
+            });
+        });
+    }
+    if let Some(pll) = node.prop_array("pll") {
+        // F0：<prediv mul>（PLL 输出直接就是 SYSCLK 源）。
+        if pll.len() < 2 {
+            return Err(syn::Error::new(
+                node.id.span(),
+                "clock: `pll` needs <prediv mul> on F0",
+            ));
+        }
+        let pre = format_ident!("DIV{}", pll[0]);
+        let mul = format_ident!("MUL{}", pll[1]);
+        let src = match node.prop_str_opt("source")?.as_deref() {
+            None | Some("hsi") => quote!(HSI),
+            Some("hse") => quote!(HSE),
+            Some("hsi48") => quote!(HSI48),
+            Some(other) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `source` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.pll = Some(::embassy_stm32::rcc::Pll {
+                src: ::embassy_stm32::rcc::PllSource::#src,
+                prediv: ::embassy_stm32::rcc::PllPreDiv::#pre,
+                mul: ::embassy_stm32::rcc::PllMul::#mul,
+            });
+        });
+    }
+    if let Some(sys) = node.prop_str_opt("sys")? {
+        let v = match sys.as_str() {
+            "hsi" => quote!(HSI),
+            "hse" => quote!(HSE),
+            "pll1_p" => quote!(PLL1_P),
+            "hsi48" => quote!(HSI48),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `sys` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.sys = ::embassy_stm32::rcc::Sysclk::#v; });
+    }
+    if let Some(n) = node.prop_u32_any(&["ahb"]) {
+        let v = format_ident!("DIV{}", n);
+        stmts.push(quote! { config.rcc.ahb_pre = ::embassy_stm32::rcc::AHBPrescaler::#v; });
+    }
+    if let Some(n) = node.prop_u32_any(&["apb1"]) {
+        let v = format_ident!("DIV{}", n);
+        stmts.push(quote! { config.rcc.apb1_pre = ::embassy_stm32::rcc::APBPrescaler::#v; });
+    }
+    if node.prop_bool("hsi48") {
+        let sync = node.prop_bool("hsi48_sync");
+        stmts.push(quote! {
+            config.rcc.hsi48 = Some(::embassy_stm32::rcc::Hsi48Config {
+                sync_from_usb: #sync,
+            });
+        });
+    }
+    Ok(stmts)
+}
+
 /// 把 `"DMA1_CH0"` 这类通道名转成对应的中断名。
 /// - H7/F4：`DMA1_CH0` → `DMA1_STREAM0`
 /// - L4：中断就叫 `DMA1_CH0`（embassy 统一命名）
 fn stream_irq(channel: &str, node: &DslNode, chip: Option<&str>) -> Result<Ident> {
-    let irq = if channel.contains("_STREAM") || channel.contains("_CHANNEL") {
+    let irq = if chip.map(|c| c.contains("f0")).unwrap_or(false) {
+        // F0 的 DMA 中断是组向量：DMA1_CHANNEL1 / DMA1_CHANNEL2_3 /
+        // DMA1_CHANNEL4_5_6_7（同一组的通道共享一个向量，handler 合并绑定）。
+        let num: u32 = channel
+            .rsplit('_')
+            .next()
+            .and_then(|s| s.strip_prefix("CH"))
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| {
+                syn::Error::new(
+                    node.id.span(),
+                    format!("stm32 backend: cannot parse F0 DMA channel `{channel}`"),
+                )
+            })?;
+        match num {
+            1 => "DMA1_CHANNEL1".to_string(),
+            2..=3 => "DMA1_CHANNEL2_3".to_string(),
+            4..=7 => "DMA1_CHANNEL4_5_6_7".to_string(),
+            _ => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("stm32 backend: DMA channel `{channel}` is out of F0 range (DMA1_CH1..=CH7)"),
+                ))
+            }
+        }
+    } else if channel.contains("_STREAM") || channel.contains("_CHANNEL") {
         channel.to_string()
     } else if chip
-        .map(|c| c.contains("l4") || c.contains("g4") || c.contains("f1"))
+        .map(|c| c.contains("l4") || c.contains("g4") || c.contains("f1") || c.contains("f0"))
         .unwrap_or(false)
     {
         // L4/G4/F1：通道类型 `DMA1_CH1`，中断名 `DMA1_CHANNEL1`。
@@ -3172,7 +3477,11 @@ fn push_dma_bindings(
 
 fn push_binding(bindings: &mut Vec<(String, TokenStream2)>, irq: Ident, handler: TokenStream2) {
     let name = irq.to_string();
-    if !bindings.iter().any(|(n, _)| *n == name) {
+    // 多个中断信号合并到同一向量时（F0 的 DMA 组、CEC_CAN、I2C1 单中断），
+    // 把 handler 合并到同一行（bind_interrupts 支持 `IRQ => h1, h2;`）。
+    if let Some((_, existing)) = bindings.iter_mut().find(|(n, _)| *n == name) {
+        existing.extend(quote!(, #handler));
+    } else {
         bindings.push((name, handler));
     }
 }
@@ -3220,7 +3529,7 @@ fn comp_pin(pin: Option<Ident>) -> TokenStream2 {
 }
 
 /// 由引脚名推导 EXTI 通道与中断（`PC0` → `EXTI0`，`PB10` → `EXTI15_10`）。
-fn exti_info(pin: &str) -> Result<(Ident, Ident, Ident)> {
+fn exti_info(pin: &str, f0: bool) -> Result<(Ident, Ident, Ident)> {
     let digits: String = pin.chars().skip_while(|c| !c.is_ascii_digit()).collect();
     let num: u32 = digits.parse().map_err(|_| {
         syn::Error::new(
@@ -3234,10 +3543,19 @@ fn exti_info(pin: &str) -> Result<(Ident, Ident, Ident)> {
             format!("pin `{pin}` has no EXTI channel"),
         ));
     }
-    let irq_name = match num {
-        0..=4 => format!("EXTI{num}"),
-        5..=9 => "EXTI9_5".to_string(),
-        _ => "EXTI15_10".to_string(),
+    let irq_name = if f0 {
+        // F0 只有 3 个 EXTI 向量：EXTI0_1 / EXTI2_3 / EXTI4_15。
+        match num {
+            0..=1 => "EXTI0_1".to_string(),
+            2..=3 => "EXTI2_3".to_string(),
+            _ => "EXTI4_15".to_string(),
+        }
+    } else {
+        match num {
+            0..=4 => format!("EXTI{num}"),
+            5..=9 => "EXTI9_5".to_string(),
+            _ => "EXTI15_10".to_string(),
+        }
     };
     Ok((
         format_ident!("EXTI{num}"),
@@ -3580,6 +3898,50 @@ mod tests {
         assert!(tokens.contains("Sysclk::PLL1_P"));
         assert!(tokens.contains("APBPrescaler::DIV2"));
         assert!(tokens.contains("ADCPrescaler::DIV6"));
+    }
+
+    #[test]
+    fn intent_f0_48mhz_hsi_with_usb() {
+        // HSI 8 MHz：F0 的 HSI 不需要 ÷2，÷1 ×6 = 48 MHz；
+        // USB 由 HSI48/CRS 提供（不依赖 PLL）。
+        let p = plan_f0(48_000_000, Some(48_000_000), None).unwrap();
+        assert_eq!((p.prediv, p.mul), (1, 6));
+        assert!(p.usb48);
+        assert!(p.hse.is_none());
+    }
+
+    #[test]
+    fn intent_f0_48mhz_hse() {
+        // 8 MHz 晶振：÷1 ×6 = 48 MHz。
+        let p = plan_f0(48_000_000, None, Some(8_000_000)).unwrap();
+        assert_eq!((p.prediv, p.mul), (1, 6));
+        assert_eq!(p.hse, Some(8_000_000));
+    }
+
+    #[test]
+    fn intent_f0_rejects_overclock() {
+        let err = plan_f0(64_000_000, None, None).unwrap_err();
+        assert!(err.contains("48 MHz"));
+    }
+
+    #[test]
+    fn stm32_backend_generates_f0_clock_config() {
+        let clock = clock_node(&[
+            ("source", PropValue::Str(LitStr::new("hsi", Span::call_site()))),
+            ("pll", PropValue::Array(vec![1, 6])),
+            ("sys", PropValue::Str(LitStr::new("pll1_p", Span::call_site()))),
+            ("ahb", PropValue::U32(LitInt::new("1", Span::call_site()))),
+            ("apb1", PropValue::U32(LitInt::new("1", Span::call_site()))),
+            ("hsi48", PropValue::Bool(true)),
+            ("hsi48_sync", PropValue::Bool(true)),
+        ]);
+        let stmts = f0_clock_config(&clock).unwrap();
+        let tokens = quote!(#(#stmts)*).to_string().replace(' ', "");
+        assert!(tokens.contains("PllSource::HSI"));
+        assert!(tokens.contains("PllPreDiv::DIV1"));
+        assert!(tokens.contains("PllMul::MUL6"));
+        assert!(tokens.contains("Sysclk::PLL1_P"));
+        assert!(tokens.contains("sync_from_usb:true"));
     }
 #[cfg(test)]
 fn clock_node(props: &[(&str, PropValue)]) -> DslNode {

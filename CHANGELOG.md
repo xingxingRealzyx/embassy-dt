@@ -41,16 +41,24 @@
     AFIO 引脚默认 remap 0（消除 `PwmPin` 的 A 泛型歧义）、
     ADC1_2 中断绑定、bxCAN 合并中断名（`USB_HP_CAN1_TX` 等）、
     DMA 中断 `DMA1_CHANNELn`
+  - F0 支持：意图式时钟（HSI 8M 无需 ÷2，PLL ≤ 48 MHz；
+    USB 用 HSI48/CRS，不依赖 PLL）、DMA 组向量映射
+    （`DMA1_CHANNEL2_3` / `DMA1_CHANNEL4_5_6_7`）、
+    **同名中断 handler 合并**（`bind_interrupts` 一行多 handler：
+    CEC_CAN 四路、DMA 组内多通道、I2C1 单中断 EV/ER）、
+    EXTI 分组（EXTI0_1/EXTI2_3/EXTI4_15）、ADC1_COMP、
+    CRC v3（带 Config）、USB 独立 `USB` 向量（与 CAN 共存）
 
 ### STM32 后端（embassy-dt-stm32）
 
 - 芯片：STM32H723ZG（默认）、STM32F411CE、STM32L476RG、STM32G474RE、
-  STM32F103C8、STM32F103RE
+  STM32F103C8、STM32F103RE、STM32F072RB
 - 板级 DTS：Nucleo-H723ZI、自定义 H723、BlackPill-F411、Nucleo-L476RG、
   Nucleo-G474RE（含 FDCAN 专用 overlay：I2C1→I2C2，PB8/PB9 让给 FDCAN1）、
   BluePill-F103C8、Nucleo-F103RB（`/delete-node/` overlay：删 usb0/spi0
-  后把 PB8/PB9 给 CAN1）
-- 示例：39 个固件（对照 embassy 官方示例重写 + 驱动闭环演示）
+  后把 PB8/PB9 给 CAN1）、Nucleo-F072RB（CAN overlay：I2C1→I2C2，
+  USB 与 CAN 中断独立可共存）
+- 示例：44 个固件（对照 embassy 官方示例重写 + 驱动闭环演示）
 
 ### 驱动（embassy-dt-bme280）
 

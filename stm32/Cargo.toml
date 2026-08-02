@@ -24,6 +24,7 @@ stm32l476rg = ["embassy-stm32/stm32l476rg"]
 stm32g474re = ["embassy-stm32/stm32g474re", "embassy-stm32/single-bank"]
 stm32f103c8 = ["embassy-stm32/stm32f103c8"]
 stm32f103re = ["embassy-stm32/stm32f103re"]
+stm32f072rb = ["embassy-stm32/stm32f072rb"]
 
 [dev-dependencies]
 cortex-m-rt = "0.7"
@@ -198,6 +199,26 @@ required-features = ["stm32f103c8"]
 [[example]]
 name = "f103_embassy_adc"
 required-features = ["stm32f103c8"]
+
+[[example]]
+name = "f072_nucleo"
+required-features = ["stm32f072rb"]
+
+[[example]]
+name = "f072_driver_bme280"
+required-features = ["stm32f072rb"]
+
+[[example]]
+name = "f072_embassy_can"
+required-features = ["stm32f072rb"]
+
+[[example]]
+name = "f072_embassy_usb_serial"
+required-features = ["stm32f072rb"]
+
+[[example]]
+name = "f072_embassy_adc"
+required-features = ["stm32f072rb"]
 
 [[example]]
 name = "h723_embassy_spi_shared"
