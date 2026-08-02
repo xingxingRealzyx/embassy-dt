@@ -1,0 +1,89 @@
+/dts-v1/;
+
+/ {
+    model = "BlackPill-F411CE";
+    compatible = "weact,blackpill-f411ce";
+
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB6";
+        sda = "PB7";
+        // F4 无 DMAMUX：I2C1 TX/RX 固定使用 DMA1_CH1 / DMA1_CH0。
+        dma-tx = "DMA1_CH1";
+        dma-rx = "DMA1_CH0";
+        frequency = <100000>;
+    };
+
+    led0: led@0 {
+        compatible = "embassy-dt,gpio-out";
+        pin = "PC13";
+        level = "high";
+    };
+
+    btn0: btn@1 {
+        compatible = "embassy-dt,gpio-in";
+        pin = "PB10";
+        pull = "up";
+        exti;
+    };
+
+    adc0: adc@40012000 {
+        compatible = "embassy-dt,periph-adc";
+        periph = "ADC1";
+    };
+
+    crc0: crc@40023000 {
+        compatible = "embassy-dt,periph-crc";
+        periph = "CRC";
+    };
+
+    pwm0: pwm@40000000 {
+        compatible = "embassy-dt,periph-pwm";
+        periph = "TIM2";
+        ch1 = "PA0";
+        ch2 = "PA1";
+        ch3 = "PA2";
+        ch4 = "PA3";
+        frequency = <1000>;
+    };
+
+    usb0: usb@50000000 {
+        compatible = "embassy-dt,periph-usb";
+        periph = "USB_OTG_FS";
+        dp = "PA12";
+        dm = "PA11";
+        ep_out = <256>;
+    };
+
+    i2s0: i2s@40003800 {
+        compatible = "embassy-dt,periph-i2s";
+        periph = "SPI2";
+        sd = "PB15";
+        ws = "PB12";
+        ck = "PB13";
+        dma = "DMA1_CH4";
+        buffer = <512>;
+    };
+
+    pwm_in0: pwm-in@0 {
+        compatible = "embassy-dt,periph-pwm-input";
+        periph = "TIM3";
+        pin = "PA6";
+        frequency = <10000>;
+    };
+
+    pwm_src: pwm-src@0 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PB2";
+    };
+
+    pwm_adv0: pwm-adv@0 {
+        compatible = "embassy-dt,periph-complementary-pwm";
+        periph = "TIM1";
+        ch1 = "PA8";
+        // PB13 被 I2S2 占用，互补通道用 PA7。
+        ch1n = "PA7";
+        frequency = <10000>;
+    };
+};

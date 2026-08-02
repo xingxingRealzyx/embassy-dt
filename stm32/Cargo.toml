@@ -1,0 +1,136 @@
+[package]
+name = "embassy-dt-stm32"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "STM32 backend for embassy-dt (async device tree for Embassy)."
+keywords = ["embassy", "embedded", "async", "device-tree", "stm32"]
+categories = ["embedded", "no-std"]
+documentation = "https://docs.rs/embassy-dt-stm32"
+readme = "README.md"
+
+[dependencies]
+embassy-dt = { path = "..", version = "0.1.0" }
+embassy-stm32 = { version = "0.6", default-features = false, features = ["time-driver-any", "exti"] }
+
+[features]
+default = ["stm32h723zg"]
+stm32h723zg = ["embassy-stm32/stm32h723zg"]
+stm32f411ce = ["embassy-stm32/stm32f411ce"]
+
+[dev-dependencies]
+cortex-m-rt = "0.7"
+critical-section = { version = "1", features = ["restore-state-bool"] }
+defmt = "1"
+defmt-rtt = "1"
+embassy-stm32 = { version = "0.6", features = ["defmt"] }
+embassy-futures = "0.1"
+embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-time = "0.5"
+embassy-usb = { version = "0.6", features = ["defmt"] }
+panic-probe = "1"
+usbd-hid = "0.10"
+
+[package.metadata.docs.rs]
+targets = ["thumbv7em-none-eabihf"]
+
+[[example]]
+name = "h723_nucleo"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_custom"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "f411_blackpill"
+required-features = ["stm32f411ce"]
+
+[[example]]
+name = "h723_embassy_i2c"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_pwm"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_rng"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_adc"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_usart"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_spi"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_can"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_dac"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_button"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_input_capture"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_qei"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "h723_embassy_usb_serial"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "f411_embassy_usb_serial"
+required-features = ["stm32f411ce"]
+
+[[example]]
+name = "h723_embassy_i2s"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "f411_embassy_i2s"
+required-features = ["stm32f411ce"]
+
+[[example]]
+name = "h723_embassy_usb_hid_keyboard"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "f411_embassy_usb_hid_keyboard"
+required-features = ["stm32f411ce"]
+
+[[example]]
+name = "h723_embassy_pwm_input"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "f411_embassy_pwm_input"
+required-features = ["stm32f411ce"]
+
+[[example]]
+name = "f411_embassy_pwm_complementary"
+required-features = ["stm32f411ce"]
+
+[[example]]
+name = "h723_embassy_usb_hid_mouse"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "f411_embassy_usb_hid_mouse"
+required-features = ["stm32f411ce"]

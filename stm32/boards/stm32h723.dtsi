@@ -1,0 +1,162 @@
+// STM32H723 芯片级基础配置。
+//
+// 板级 .dts 通过 `#include "stm32h723.dtsi"` 复用本文件，再按需覆盖
+// 引脚 / DMA / 频率 —— 这就是「配置写一次，换板只改差异」的 overlay 语义。
+
+/ {
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB8";
+        sda = "PB7";
+        dma-tx = "DMA1_CH0";
+        dma-rx = "DMA1_CH1";
+        frequency = <400000>;
+    };
+
+    spi0: spi@40013000 {
+        compatible = "embassy-dt,bus-spi";
+        periph = "SPI1";
+        sck = "PA5";
+        mosi = "PA7";
+        miso = "PA6";
+        dma-tx = "DMA1_CH2";
+        dma-rx = "DMA1_CH3";
+        frequency = <1000000>;
+    };
+
+    uart0: uart@40011000 {
+        compatible = "embassy-dt,bus-uart";
+        periph = "USART1";
+        rx = "PA10";
+        tx = "PA9";
+        dma-tx = "DMA1_CH4";
+        dma-rx = "DMA1_CH5";
+        baud = <115200>;
+    };
+
+    led0: led@0 {
+        compatible = "embassy-dt,gpio-out";
+        pin = "PC13";
+        level = "high";
+    };
+
+    btn0: btn@1 {
+        compatible = "embassy-dt,gpio-in";
+        pin = "PC0";
+        pull = "up";
+        exti;
+    };
+
+    adc_in: adc-in@0 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PB0";
+    };
+
+    rng0: rng@48002400 {
+        compatible = "embassy-dt,periph-rng";
+        periph = "RNG";
+    };
+
+    adc0: adc@40012000 {
+        compatible = "embassy-dt,periph-adc";
+        periph = "ADC1";
+    };
+
+    crc0: crc@58009000 {
+        compatible = "embassy-dt,periph-crc";
+        periph = "CRC";
+    };
+
+    dac0: dac@40007400 {
+        compatible = "embassy-dt,periph-dac";
+        periph = "DAC1";
+        pin = "PA4";
+    };
+
+    pwm0: pwm@40000000 {
+        compatible = "embassy-dt,periph-pwm";
+        periph = "TIM2";
+        ch1 = "PA0";
+        ch2 = "PA1";
+        ch3 = "PA2";
+        ch4 = "PA3";
+        frequency = <1000>;
+    };
+
+    can0: can@40006400 {
+        compatible = "embassy-dt,periph-can";
+        periph = "FDCAN1";
+        // PA0-3 被 PWM 占用、PB8/9 被 I2C1 占用、PA11/12 留给 USB，
+        // FDCAN1 用 PD0/PD1。
+        rx = "PD0";
+        tx = "PD1";
+    };
+
+    usb0: usb@40040000 {
+        compatible = "embassy-dt,periph-usb";
+        periph = "USB_OTG_HS";
+        dp = "PA12";
+        dm = "PA11";
+        ep_out = <256>;
+    };
+
+    qei0: qei@40000400 {
+        compatible = "embassy-dt,periph-qei";
+        periph = "TIM3";
+        ch1 = "PB4";
+        ch2 = "PB5";
+    };
+
+    ic0: ic@40000800 {
+        compatible = "embassy-dt,periph-input-capture";
+        periph = "TIM4";
+        // PB6/7 可能被板级 I2C 占用，输入捕获用 CH4/PB9，双板通用。
+        ch4 = "PB9";
+        frequency = <1000000>;
+    };
+
+    sdmmc0: sdmmc@52007000 {
+        compatible = "embassy-dt,periph-sdmmc";
+        periph = "SDMMC1";
+        clk = "PC12";
+        cmd = "PD2";
+        d0 = "PC8";
+    };
+
+    spi1: spi@40003800 {
+        compatible = "embassy-dt,bus-spi";
+        periph = "SPI2";
+        mode = "slave";
+        sck = "PB13";
+        mosi = "PB15";
+        miso = "PB14";
+        cs = "PB12";
+        dma-tx = "DMA2_CH1";
+        dma-rx = "DMA2_CH2";
+        frequency = <1000000>;
+    };
+
+    i2s0: i2s@40003c00 {
+        compatible = "embassy-dt,periph-i2s";
+        periph = "SPI3";
+        sd = "PB2";
+        ws = "PA15";
+        ck = "PB3";
+        dma = "DMA2_CH3";
+        buffer = <512>;
+    };
+
+    pwm_in0: pwm-in@0 {
+        compatible = "embassy-dt,periph-pwm-input";
+        // H723 没有 TIM8；TIM1 是高级定时器但也实现 GeneralInstance4Channel。
+        periph = "TIM1";
+        pin = "PA8";
+        frequency = <10000>;
+    };
+
+    pwm_src: pwm-src@0 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PB1";
+    };
+};

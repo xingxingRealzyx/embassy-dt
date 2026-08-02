@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["macros", "stm32"]
+
+[package]
+name = "embassy-dt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Async device tree for Embassy: describe your hardware once, run on every board."
+keywords = ["embassy", "embedded", "async", "device-tree", "no-std"]
+categories = ["embedded", "no-std"]
+readme = "README.md"
+documentation = "https://docs.rs/embassy-dt"
+
+[dependencies]
+embassy-dt-macros = { path = "macros", version = "0.1.0" }
+
+[features]
+default = []

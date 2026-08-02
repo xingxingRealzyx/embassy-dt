@@ -1,0 +1,19 @@
+[package]
+name = "embassy-dt-macros"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Procedural macros for embassy-dt: the device_tree! DSL."
+keywords = ["embassy", "embedded", "async", "device-tree", "macro"]
+categories = ["embedded", "no-std", "development-tools::procedural-macro"]
+documentation = "https://docs.rs/embassy-dt-macros"
+readme = "README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }

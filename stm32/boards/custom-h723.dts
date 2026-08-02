@@ -1,0 +1,24 @@
+/dts-v1/;
+#include "stm32h723.dtsi"
+
+/ {
+    model = "Custom-H723-Board";
+    compatible = "mycompany,custom-h723";
+
+    // 换板不换码：应用代码一行不动，只改引脚 / DMA 分配。
+    i2c0: i2c@40005400 {
+        scl = "PB6";
+        frequency = <100000>;
+    };
+
+    // 板级额外总线：USART3。
+    uart1: uart@40004800 {
+        compatible = "embassy-dt,bus-uart";
+        periph = "USART3";
+        rx = "PD9";
+        tx = "PD8";
+        dma-tx = "DMA1_CH6";
+        dma-rx = "DMA1_CH7";
+        baud = <9600>;
+    };
+};

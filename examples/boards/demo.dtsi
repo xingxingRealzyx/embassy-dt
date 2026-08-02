@@ -1,0 +1,24 @@
+// 宿主端演示用的芯片级 dtsi：被 demo.dts include。
+
+/ {
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB8";
+        sda = "PB7";
+        frequency = <400000>;
+    };
+
+    uart0: uart@40011000 {
+        compatible = "embassy-dt,bus-uart";
+        periph = "USART1";
+        rx = "PA10";
+        tx = "PA9";
+        baud = <115200>;
+    };
+
+    gps: gps@1 {
+        compatible = "u-blox,nmea";
+        bus = <&uart0>;
+    };
+};

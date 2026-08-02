@@ -1,0 +1,262 @@
+# embassy-dt
+
+> 给 Embassy 的异步设备树：**硬件配置写一次，固件到处跑。**
+
+`embassy-dt` 把「硬件长什么样」与「应用逻辑」分离：硬件用设备树描述
+（Rust DSL 或 **`.dts` / `.dtsi` 文件**），宏在编译期校验并生成静态树
+描述；STM32 后端把树翻译成类型化的 Embassy HAL 实例。换板子只改配置，
+应用代码不动。
+
+## 仓库结构
+
+```text
+embassy-dt/
+├── src/            核心：TreeDesc / 节点 / 属性 / 拓扑排序 / 异步上线引擎
+├── macros/         device_tree! 过程宏：DSL + DTS/DTSI 解析 + 编译期校验 + 后端代码生成
+├── stm32/          STM32 后端（embassy-dt-stm32）：H723ZG + F411CE + 3 个固件示例
+├── examples/       宿主端 demo（DSL 与 DTS 两种入口）
+```
+
+核心 `embassy-dt` 是纯 `no_std`、零堆分配、`#![forbid(unsafe_code)]`，
+不依赖任何芯片 HAL。
+
+## 两种配置入口
+
+### 1) `.dts` / `.dtsi` 文件（推荐）
+
+```rust
+use embassy_dt::device_tree;
+
+device_tree! {
+    name "nucleo-h723zi";       // 省略时自动取 DTS 根节点的 model
+    backend stm32;              // 额外生成类型化 Board
+    chip "stm32h723zg";         // 芯片相关外设（ADC/CRC/CAN）的构造差异
+    from "boards/nucleo-h723zi.dts";
+}
+```
+
+`from` 支持：
+
+- `#include "xxx.dtsi"` 与 `/include/ "xxx.dtsi"`（相对路径递归，防重复 include）
+- 注释、标签（`i2c0: i2c@40005400 { ... }`）、`<...>` 数值/`&label` 引用、
+  `<(...)>` 整数表达式、`&{/path}` 路径引用、`[...]` 字节串、字符串拼接、布尔属性
+- **板级 overlay 合并**：同标签节点按属性覆盖——`board.dts` include
+  `chip.dtsi` 后只需写差异（换引脚、换频率）
+- `/delete-node/ &label;` 与 `/delete-property/ name;`
+- 树名自动取自 `model`；所有加载的文件都被 rustc 跟踪（改 `.dtsi` 会触发
+  重新编译）
+
+也支持 **`.dtb` 二进制**（`from = "board.dtb"`，按后缀自动识别）：内置
+FDT 解析器，`phandle` 引用自动解析为依赖；DTB 不保留标签，节点 id 取路径
+（`/i2c@40005400` → `i2c_40005400`）。
+
+```dts
+// chip.dtsi —— 芯片级基础配置（多板复用）
+/ {
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB8"; sda = "PB7";
+        dma-tx = "DMA1_CH0"; dma-rx = "DMA1_CH1";
+        frequency = <400000>;
+    };
+};
+
+// board.dts —— 板级差异（换板只改这里）
+/dts-v1/;
+#include "chip.dtsi"
+/ {
+    model = "Custom-H723-Board";
+    i2c0: i2c@40005400 {
+        scl = "PB6";          // 覆盖引脚
+        frequency = <100000>;
+    };
+};
+```
+
+### 2) Rust DSL
+
+```rust
+device_tree! {
+    name "demo-board";
+    bus i2c0: I2c { periph: "I2C1", scl: "PB8", sda: "PB7", dma_tx: "DMA1_CH0", dma_rx: "DMA1_CH1", freq: 400_000 };
+    bus uart0: Uart { periph: "USART1", rx: "PA10", tx: "PA9", dma_tx: "DMA1_CH4", dma_rx: "DMA1_CH5", baud: 115_200 };
+    gpio led0: Out { pin: "PC13", level: "high" };
+    device bme280: Bme280Driver { bus: i2c0, addr: 0x76 };
+}
+```
+
+重复 id、悬空依赖、依赖环都会在**编译期**报错。
+
+## 异步上线引擎
+
+`init_devices` 按依赖序异步 probe 树中的节点（总线 → 设备），零堆分配；
+宿主端演示（DTS 驱动）：
+
+```sh
+cargo run --offline --example async_init
+# Host-Demo-Board 的异步上线日志:
+#   ✓ i2c0
+#   ✓ uart0
+#   ✓ gps
+#   ✓ bme280
+```
+
+## STM32 后端（embassy-dt-stm32）
+
+支持节点：
+
+| 节点 | 属性 | 生成的类型 |
+| --- | --- | --- |
+| `bus ...: I2c` | `periph` / `scl` / `sda` / `dma_tx` / `dma_rx` / `freq\|frequency` | `i2c::I2c<'static, Async, Master>` |
+| `bus ...: Spi` | `periph` / `sck` / `mosi` / `miso` / `dma_tx` / `dma_rx` / `freq\|frequency` | `spi::Spi<'static, Async, Master>` |
+| `bus ...: Uart` | `periph` / `rx` / `tx` / `dma_tx` / `dma_rx` / `baud\|baudrate` | `usart::Uart<'static, Async>` |
+| `gpio ...: Out` | `pin` / `level`(high\|low) | `gpio::Output<'static>` |
+| `gpio ...: In` | `pin` / `pull`(up\|down\|none) | `gpio::Input<'static>` |
+| `periph ...: Rng` | `periph` | `rng::Rng<'static, RNG>` |
+| `periph ...: Adc` | `periph` | `adc::Adc<'static, ADC1>` |
+| `periph ...: Crc` | `periph` | `crc::Crc<'static>` |
+| `periph ...: Dac` | `periph` / `pin`（阻塞模式） | `dac::DacChannel<'static, Blocking>` |
+| `periph ...: Pwm` | `periph` / `ch1..ch4` 可选 / `freq` | `timer::simple_pwm::SimplePwm<'static, TIM2>` |
+| `periph ...: Can` | `periph` / `rx` / `tx` | `can::Can<'static>`（H723 FDCAN / F4 bxCAN） |
+| `periph ...: Usb` | `periph` / `dp` / `dm` / `ep_out` | `usb::Driver<'static, USB_OTG_HS/FS>`（自动生成端点缓冲） |
+| `periph ...: Qei` | `periph` / `ch1` / `ch2` | `timer::qei::Qei<'static, TIM3>`（正交解码） |
+| `periph ...: InputCapture` | `periph` / `ch1..ch4` 可选 / `freq` | `timer::input_capture::InputCapture<'static, TIM4>` |
+| `periph ...: Sdmmc` | `periph` / `clk` / `cmd` / `d0` | `sdmmc::Sdmmc<'static>`（H723，1-bit） |
+| `periph ...: I2s` | `periph` / `sd` / `ws` / `ck` / `dma` / `buffer` | `i2s::I2S<'static, u16>`（TX-only，自动生成 DMA 缓冲） |
+| `bus ...: Spi` + `mode = "slave"` | 额外 `cs` | `spi::Spi<'static, Async, Slave>` |
+
+宏自动生成 `bind_interrupts!`（`I2C1_EV/ER`、`USART1`、`DMA1_STREAMn`）。
+引脚 AF、DMA 兼容性、中断绑定全部由 embassy-stm32 类型系统编译期保证：
+把 `scl` 改成 `"PA0"` 会直接报 `PA0: SclPin<I2C1>` 不满足。
+
+`chip "..."` 声明用于芯片相关的构造差异：H723（`adc_v3`/CRC 带 Config/
+FDCAN）与 F411（`adc_v2`/CRC 无 Config/bxCAN）会自动生成不同的代码。
+外设节点之间如果发生引脚冲突（比如两个节点都用 PA0），会被类型系统在
+编译期直接拦住。
+
+已支持的芯片：
+
+- `stm32h723zg`（默认，Nucleo-H723ZI）
+- `stm32f411ce`（WeAct BlackPill；无 DMAMUX，DMA 通道固定映射；
+  该封装的 metapac 数据不含 RNG/DAC/CAN，因此示例只用到 ADC/CRC/PWM）
+
+## 三块板子，一份应用代码
+
+`stm32/examples/common/app.rs` 是唯一一份应用逻辑（心跳 LED），三块板子
+各自只有 `.dts` 差异：
+
+```sh
+cd stm32
+cargo check --offline --target thumbv7em-none-eabihf --example h723_nucleo    # Nucleo-H723ZI
+cargo check --offline --target thumbv7em-none-eabihf --example h723_custom   # 自定义 H723 板（覆盖引脚 + USART3）
+cargo check --offline --target thumbv7em-none-eabihf \
+    --no-default-features --features stm32f411ce --example f411_blackpill    # F411CE（换芯片家族）
+```
+
+## 对照 embassy 官方示例（设备树风格重写）
+
+`stm32/examples/h723_embassy_*.rs` 是官方 `embassy/examples/stm32h7` 的
+设备树风格重写：硬件初始化全部收敛在 `device_tree!` 里，应用逻辑与官方
+示例逐行对应：
+
+| 示例 | 对照官方 | 使用的 Board 字段 |
+| --- | --- | --- |
+| `h723_embassy_i2c` | `i2c.rs` | `board.i2c0` |
+| `h723_embassy_pwm` | `pwm.rs` | `board.pwm0` |
+| `h723_embassy_rng` | `rng.rs` | `board.rng0` |
+| `h723_embassy_adc` | `adc.rs` | `board.adc0` + `board.adc_in`（`gpio ...: Pin` 保留原始引脚） |
+| `h723_embassy_usart` | `usart.rs` | `board.uart0` |
+| `h723_embassy_spi` | `spi.rs` | `board.spi0` |
+| `h723_embassy_can` | `can.rs` | `board.can0` |
+| `h723_embassy_dac` | `dac.rs` | `board.dac0` |
+| `h723_embassy_button` | `button_exti.rs` | `board.btn0`（dts 里 `exti;` 自动生成 `ExtiInput`） |
+| `h723_embassy_input_capture` | `stm32f4/input_capture.rs` | `board.ic0` |
+| `h723_embassy_qei` | 正交解码 | `board.qei0` |
+| `h723_embassy_usb_serial` | `usb_serial.rs` | `board.usb0`（USB CDC-ACM 串口） |
+| `f411_embassy_usb_serial` | 同上（换芯片） | `board.usb0` |
+| `h723_embassy_i2s` / `f411_embassy_i2s` | `stm32f4/i2s_dma.rs` | `board.i2s0`（H723 I2S3 / F411 I2S2） |
+| `h723_embassy_usb_hid_keyboard` / `f411_embassy_usb_hid_keyboard` | `stm32f4/usb_hid_keyboard.rs` | `board.usb0` + `board.btn0` |
+| `h723_embassy_pwm_input` / `f411_embassy_pwm_input` | `stm32f4/pwm_input.rs` | `board.pwm_in0` + `board.pwm_src`（`gpio ...: Pin` 做信号源） |
+| `f411_embassy_pwm_complementary` | `stm32f4/pwm_complementary.rs` | `board.pwm_adv0`（TIM1 互补 PWM） |
+| `h723_embassy_usb_hid_mouse` / `f411_embassy_usb_hid_mouse` | `stm32f4/usb_hid_mouse.rs` | `board.usb0` |
+
+```sh
+cd stm32
+# 编译全部 H723 示例
+cargo check --offline --target thumbv7em-none-eabihf --examples --features stm32h723zg
+# F411 USB 串口
+cargo check --offline --target thumbv7em-none-eabihf \
+    --no-default-features --features stm32f411ce --example f411_embassy_usb_serial
+```
+
+其中 `gpio ...: Pin` 是「裸引脚所有权」节点：Board 字段类型就是
+`Peri<'static, PB0>`，用于 ADC 采样这类需要把引脚交给驱动 API 的场景；
+`gpio ...: In` 加 `exti;` 属性后自动变成异步 `ExtiInput`（含中断绑定）。
+
+## 发布到 crates.io
+
+发布顺序（有依赖关系）：
+
+```sh
+cargo publish -p embassy-dt-macros   # 先发宏
+cargo publish -p embassy-dt          # 核心（依赖宏）
+cargo publish -p embassy-dt-stm32    # STM32 后端（芯片 HAL 无法在宿主机构建，
+                                     # 需要 cargo publish --no-verify）
+```
+
+本地验证打包：
+
+```sh
+cargo package --offline -p embassy-dt-macros   # 可完整验证
+cargo package --offline --no-verify -p embassy-dt      # 宏未发布前需 --no-verify
+cargo package --offline --no-verify -p embassy-dt-stm32
+```
+
+## 与现有生态的关系
+
+| crate | 做什么 | 与本项目的关系 |
+| --- | --- | --- |
+| `fdt-rs` / `dtoolkit` | 解析 DTB/FDT 二进制 | 未来 DTB 导入层的数据来源，不重复实现 |
+| `embedded-hal-async` | 总线/IO 的异步 trait | Board 句柄实现这些 trait，驱动零改动接入 |
+| `embassy-supervisor` | 任务生命周期图 | 不同层：它管任务，我们管硬件；可组合 |
+| `rdrive` | 动态驱动管理（堆 + 动态分发） | 对照物：我们走编译期静态分发，零开销 |
+
+## 设计决策
+
+1. **配置是唯一事实来源**：`device_tree!` 同时生成静态 `TREE` 数据
+   （运行时自省、未来 overlay 用）和类型化 `Board`（后端代码生成）。
+2. **编译期绑定优先**：引脚类型即安全边界；树编译成类型化句柄，而不是
+   `dyn` 查表。运行时 DTB 解析只作为可选的动态路径。
+3. **零分配**：树是 `'static` 数据；上线引擎零堆。
+4. **句柄实现 `embedded-hal-async`**：不发明新驱动 trait。
+5. **后端与核心分离**：核心不依赖任何芯片 HAL；后端负责
+   「引脚名 → HAL 外设」映射与中断绑定。
+6. **错误尽早暴露**：环、重复 id、悬空依赖在宏里编译期报错；引脚/DMA
+   错误由类型系统拦截。
+
+## 已知限制 / 后续
+
+- DTS 宏预处理（`#define` / `#ifdef`）未实现（`#include` 可用）
+- 设备节点的驱动句柄生成（driver 类型化）留待驱动生态接入
+- 多核 / 中断级执行器、电源管理编排属于 `embassy-supervisor` 的领地，可组合
+- 未覆盖的外设：ETH、SAI/I2S、LTDC/LCD/DSI、QSPI/OSPI/FMC（存储控制器）、
+  CORDIC/FMAC、加密类（AES/CRYP/HASH/PKA）、互补 PWM/单脉冲等高级定时器
+  模式、SDMMC 4/8-bit、ADC/DAC 的 DMA 异步模式、CAN-FD 高级位时序、
+  I2C 从机（embassy-stm32 0.6 暂无 API）。构造方式已表驱动，
+  后续按条目逐个补齐即可
+
+## 验证
+
+```sh
+# 宿主端：核心 + 宏（含 DTS 解析/overlay 测试）+ doc 测试
+cargo test --offline
+cargo test --offline -p embassy-dt-macros
+
+# 宿主端 DTS demo
+cargo run --offline --example demo_dts
+cargo run --offline --example async_init   # DTS → 异步上线引擎
+
+# STM32 固件交叉检查（需 thumbv7em-none-eabihf target）
+cd stm32 && cargo check --offline --target thumbv7em-none-eabihf --example h723_nucleo
+```

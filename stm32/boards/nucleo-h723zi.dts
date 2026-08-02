@@ -1,0 +1,12 @@
+/dts-v1/;
+#include "stm32h723.dtsi"
+
+/ {
+    model = "Nucleo-H723ZI";
+    compatible = "st,nucleo-h723zi";
+
+    // 演示板级覆盖：Nucleo 板上 LED 低电平点亮。
+    led0: led@0 {
+        level = "low";
+    };
+};
