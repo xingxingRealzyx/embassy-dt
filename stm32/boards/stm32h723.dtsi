@@ -157,6 +157,29 @@
         buffer = <512>;
     };
 
+    spi4: spi@40013400 {
+        compatible = "embassy-dt,bus-spi";
+        periph = "SPI4";
+        sck = "PE2";
+        mosi = "PE6";
+        miso = "PE5";
+        dma-tx = "DMA2_CH5";
+        dma-rx = "DMA2_CH6";
+        frequency = <1000000>;
+        shared; // 共享 SPI：每个设备用自己的 CS
+    };
+
+    cs0: cs@0 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PE4";
+    };
+
+    cs1: cs@1 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PE11";
+    };
+
+
     pwm_in0: pwm-in@0 {
         compatible = "embassy-dt,periph-pwm-input";
         // H723 没有 TIM8；TIM1 是高级定时器但也实现 GeneralInstance4Channel。

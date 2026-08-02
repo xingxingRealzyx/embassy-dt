@@ -728,11 +728,56 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                     .prop_str("mode")
                     .map(|m| m == "slave")
                     .unwrap_or(false);
+                let shared = node.prop_bool("shared");
 
                 push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node, chip.as_deref())?;
                 push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node, chip.as_deref())?;
 
-                if is_slave {
+                if shared {
+                    let mux_name = format_ident!("{}_MUTEX", field.to_string());
+                    statics.push(quote! {
+                        #[allow(non_upper_case_globals)]
+                        static mut #mux_name: Option<
+                            ::embassy_sync::mutex::Mutex<
+                                ::embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+                                ::embassy_stm32::spi::Spi<
+                                    'static,
+                                    ::embassy_stm32::mode::Async,
+                                    ::embassy_stm32::spi::mode::Master,
+                                >,
+                            >,
+                        > = None;
+                    });
+                    fields.push(quote! {
+                        /// 共享 SPI 总线互斥体（设备用 `SpiDevice` 包 CS 访问）。
+                        pub #field: &'static ::embassy_sync::mutex::Mutex<
+                            ::embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+                            ::embassy_stm32::spi::Spi<
+                                'static,
+                                ::embassy_stm32::mode::Async,
+                                ::embassy_stm32::spi::mode::Master,
+                            >,
+                        >
+                    });
+                    inits.push(quote! {
+                        #field: {
+                            let raw = {
+                                let mut config = ::embassy_stm32::spi::Config::default();
+                                config.frequency = ::embassy_stm32::time::Hertz(#freq);
+                                ::embassy_stm32::spi::Spi::new(
+                                    p.#periph, p.#sck, p.#mosi, p.#miso,
+                                    p.#dma_tx, p.#dma_rx,
+                                    DtIrqs,
+                                    config,
+                                )
+                            };
+                            unsafe {
+                                #mux_name = Some(::embassy_sync::mutex::Mutex::new(raw));
+                            }
+                            unsafe { #mux_name.as_ref() }.expect("spi mutex")
+                        },
+                    });
+                } else if is_slave {
                     let cs = node.pin_ident("cs")?;
                     fields.push(quote! {
                         pub #field: ::embassy_stm32::spi::Spi<
@@ -1310,31 +1355,90 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
             let id = &node.id;
             quote! { pub #id: #driver }
         });
-        let inits = devices.iter().map(|(node, driver)| {
+        let inits = devices
+            .iter()
+            .map(|(node, driver)| -> Result<TokenStream2> {
             let id = &node.id;
             let dev_ty = format_ident!("{}_Ty", id.to_string());
             let id_str = LitStr::new(&id.to_string(), id.span());
-            let args = node.deps.iter().map(|dep| {
-                let field = format_ident!("{}", dep.to_string());
-                let shared = tree
-                    .nodes
-                    .iter()
-                    .find(|n| &n.id == dep)
-                    .map(|n| n.prop_bool("shared"))
-                    .unwrap_or(false);
-                if shared {
-                    // 共享总线：驱动拿到 Clone 的共享代理。
-                    quote! { self.#field.clone() }
-                } else {
-                    quote! { self.#field }
-                }
+            // 共享 SPI 设备：Pin 类型的依赖是 CS（已被 SpiDevice 包装消耗），
+            // 不重复传给驱动。
+            let has_shared_spi = node.deps.iter().any(|d| {
+                tree.nodes.iter().any(|n| {
+                    &n.id == d
+                        && matches!(n.kind, NodeKindAst::Bus(BusKindAst::Spi))
+                        && n.prop_bool("shared")
+                })
             });
-            quote! {
+            let args = node
+                .deps
+                .iter()
+                .filter(|dep| {
+                    if !has_shared_spi {
+                        return true;
+                    }
+                    !matches!(
+                        tree.nodes
+                            .iter()
+                            .find(|n| &n.id == *dep)
+                            .map(|n| n.kind),
+                        Some(NodeKindAst::Gpio(GpioKindAst::Pin))
+                    )
+                })
+                .map(|dep| {
+                let field = format_ident!("{}", dep.to_string());
+                let dep_node = tree.nodes.iter().find(|n| &n.id == dep).unwrap();
+                match dep_node.kind {
+                    NodeKindAst::Bus(BusKindAst::I2c) if dep_node.prop_bool("shared") => {
+                        // 共享 I2C：驱动拿到 Clone 的共享代理。
+                        Ok(quote! { self.#field.clone() })
+                    }
+                    NodeKindAst::Bus(BusKindAst::Spi) if dep_node.prop_bool("shared") => {
+                        // 共享 SPI：用设备自己的 CS 引脚包一层 SpiDevice。
+                        let cs = node
+                            .deps
+                            .iter()
+                            .find(|d| {
+                                tree.nodes.iter().any(|n| {
+                                    &n.id == *d
+                                        && matches!(
+                                            n.kind,
+                                            NodeKindAst::Gpio(GpioKindAst::Pin)
+                                        )
+                                })
+                            })
+                            .ok_or_else(|| {
+                                syn::Error::new(
+                                    node.id.span(),
+                                    format!(
+                                        "device `{}` on shared SPI `{dep}` needs a `gpio ...: Pin` CS dependency",
+                                        node.id
+                                    ),
+                                )
+                            })?;
+                        let cs_field = format_ident!("{}", cs.to_string());
+                        Ok(quote! {
+                            ::embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(
+                                self.#field,
+                                ::embassy_stm32::gpio::Output::new(
+                                    self.#cs_field,
+                                    ::embassy_stm32::gpio::Level::High,
+                                    ::embassy_stm32::gpio::Speed::VeryHigh,
+                                ),
+                            )
+                        })
+                    }
+                    _ => Ok(quote! { self.#field }),
+                }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(quote! {
                 // 类型别名规避宏输出中 `Type<...>>::method` 的解析限制。
                 type #dev_ty = #driver;
                 let #id = #dev_ty::init(#(#args),*, &TREE.node(#id_str).unwrap()).await?;
-            }
-        });
+            })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let members = devices.iter().map(|(node, _)| {
             let id = &node.id;
             quote! { #id }

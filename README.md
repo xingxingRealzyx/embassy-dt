@@ -133,6 +133,23 @@ let t2 = devices.bme280b.temperature().await?;   // 共享同一总线
 （真实 BME280 驱动：reset/ID 校验/校准参数/温湿度补偿，带 datasheet
 示例值的单元测试）。
 
+**SPI 共享**：`bus ...: Spi` 加 `shared;` 后，设备通过 `cs = <&引脚节点>`
+声明自己的片选，宏自动生成 `SpiDevice`（传输期间自动拉低 CS，取消/完成
+自动拉高）：
+
+```dts
+spi4: spi@... { ...; shared; };
+cs0: cs@0 { compatible = "embassy-dt,gpio-pin"; pin = "PE4"; };
+echo0: echo@0 {
+    bus = <&spi4>;
+    cs = <&cs0>;
+    driver = "SpiEcho<SpiDevice<...>>";
+};
+```
+
+参考实现：`h723_embassy_spi_shared`（SPI4 + 两个 CS 设备的回环驱动）。
+UART 是点对点总线，共享场景无意义，不支持。
+
 ## STM32 后端（embassy-dt-stm32）
 
 支持节点：

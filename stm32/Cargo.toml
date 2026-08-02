@@ -155,3 +155,7 @@ required-features = ["stm32l476rg"]
 [[example]]
 name = "l476_driver_bme280"
 required-features = ["stm32l476rg"]
+
+[[example]]
+name = "h723_embassy_spi_shared"
+required-features = ["stm32h723zg"]

@@ -1,0 +1,22 @@
+/dts-v1/;
+#include "nucleo-h723zi.dts"
+
+/ {
+    model = "Nucleo-H723ZI (SPI shared demo)";
+
+    // 共享 SPI 演示设备：SpiEcho 类型只在对应示例中定义，
+    // 因此放在专用 overlay 里，不影响其他示例。
+    echo0: echo@0 {
+        compatible = "demo,spi-echo";
+        bus = <&spi4>;
+        cs = <&cs0>;
+        driver = "SpiEcho<embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::spi::Spi<'static, embassy_stm32::mode::Async, embassy_stm32::spi::mode::Master>, embassy_stm32::gpio::Output<'static>>>";
+    };
+
+    echo1: echo@1 {
+        compatible = "demo,spi-echo";
+        bus = <&spi4>;
+        cs = <&cs1>;
+        driver = "SpiEcho<embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::spi::Spi<'static, embassy_stm32::mode::Async, embassy_stm32::spi::mode::Master>, embassy_stm32::gpio::Output<'static>>>";
+    };
+};
