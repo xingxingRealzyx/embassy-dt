@@ -230,8 +230,12 @@ cargo check --offline --target thumbv7em-none-eabihf \
 clock {
     system = <400000000>;    // 目标系统时钟（宏自动算 PLL/分频）
     usb = <48000000>;        // USB 48 MHz（可选）
+    // hse = <8000000>;      // 可选：外部晶振；缺省用内部 HSI
 };
 ```
+
+输入源自动选择：H7 有 `hse` 属性时用外部晶振（可跑到 550 MHz），否则用
+HSI 64 MHz；F4 有 `hse` 时用晶振，否则用 HSI 16 MHz（无晶振板子可用）。
 
 也保留 v1 显式写法（`source`/`pll1`/`pll`/`sys`/`ahb`/`apb*`/`usb`/
 `clk48`/`voltage`），意图式与显式互斥（混用会编译报错）。

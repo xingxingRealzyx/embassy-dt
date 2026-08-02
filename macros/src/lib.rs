@@ -1401,7 +1401,7 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
     let hse = clock.prop_u32_any(&["hse"]);
     let node = match chip_name(tree)? {
         Some(chip) if chip.contains("h723") => {
-            let plan = plan_h7(sysclk, usb).map_err(|msg| {
+            let plan = plan_h7(sysclk, usb, hse).map_err(|msg| {
                 syn::Error::new(clock.id.span(), format!("clock: {msg}"))
             })?;
             synth_h7_node(&plan)
@@ -1447,12 +1447,24 @@ struct H7Plan {
     apb: u32,
     scale1: bool,
     usb48: bool,
+    source_hse: bool,
 }
 
 /// STM32H7：HSI 64 MHz 输入，PLL1 VCO 192–836 MHz，PLLN 4–512，PLLM 1–64，
 /// PLLP 1–64；SYSCLK ≤ 550 MHz，AHB ≤ 275 MHz，APB ≤ 137.5 MHz。
-fn plan_h7(sysclk: u32, usb: Option<u32>) -> std::result::Result<H7Plan, String> {
-    const INPUT: u64 = 64_000_000;
+fn plan_h7(
+    sysclk: u32,
+    usb: Option<u32>,
+    hse: Option<u32>,
+) -> std::result::Result<H7Plan, String> {
+    // HSE 存在时用外部晶振作为 PLL 源，否则用内部 HSI 64 MHz。
+    let input = hse.unwrap_or(64_000_000) as u64;
+    let source_hse = hse.is_some();
+    if let Some(h) = hse {
+        if !(1_000_000..=50_000_000).contains(&h) {
+            return Err(format!("HSE frequency {h} Hz out of range (1–50 MHz)"));
+        }
+    }
     const VCO_MIN: u64 = 192_000_000;
     const VCO_MAX: u64 = 836_000_000;
 
@@ -1474,10 +1486,10 @@ fn plan_h7(sysclk: u32, usb: Option<u32>) -> std::result::Result<H7Plan, String>
         }
         for prediv in 1u32..=64 {
             let num = vco * prediv as u64;
-            if num % INPUT != 0 {
+            if num % input != 0 {
                 continue;
             }
-            let mul = num / INPUT;
+            let mul = num / input;
             if (4..=512).contains(&mul) {
                 let cand = (vco, prediv, mul as u32, divp);
                 if best.as_ref().map_or(true, |b| cand.0 < b.0) {
@@ -1486,13 +1498,12 @@ fn plan_h7(sysclk: u32, usb: Option<u32>) -> std::result::Result<H7Plan, String>
             }
         }
     }
-    let (vco, prediv, mul, divp) = best
+    let (_, prediv, mul, divp) = best
         .ok_or_else(|| format!("cannot find a valid PLL1 config for {sysclk} Hz"))?;
     let ahb = pick_div(sysclk, 275_000_000, &[1, 2, 4, 8, 16, 64, 128, 256, 512])
         .ok_or("cannot satisfy AHB frequency limit")?;
     let apb = pick_div(sysclk / ahb, 137_500_000, &[1, 2, 4, 8, 16])
         .ok_or("cannot satisfy APB frequency limit")?;
-    let _ = vco;
     Ok(H7Plan {
         prediv,
         mul,
@@ -1501,6 +1512,7 @@ fn plan_h7(sysclk: u32, usb: Option<u32>) -> std::result::Result<H7Plan, String>
         apb,
         scale1: sysclk <= 400_000_000,
         usb48: usb.is_some(),
+        source_hse,
     })
 }
 
@@ -1512,6 +1524,7 @@ struct F4Plan {
     divp: u32,
     divq: u32,
     usb48: bool,
+    source_hse: bool,
     ahb: u32,
     apb1: u32,
     apb2: u32,
@@ -1528,7 +1541,9 @@ fn plan_f4(
     usb: Option<u32>,
     hse: Option<u32>,
 ) -> std::result::Result<F4Plan, String> {
-    let input = hse.ok_or("F4 意图式时钟需要 `hse = <晶振频率>`")? as u64;
+    // HSE 存在时用外部晶振，否则用内部 HSI 16 MHz（无晶振板子可用）。
+    let input = hse.unwrap_or(16_000_000) as u64;
+    let source_hse = hse.is_some();
     if sysclk > 100_000_000 {
         return Err(format!(
             "system clock {sysclk} Hz exceeds F411 maximum (100 MHz)"
@@ -1596,6 +1611,7 @@ fn plan_f4(
         divp,
         divq,
         usb48: usb.is_some(),
+        source_hse,
         ahb,
         apb1,
         apb2,
@@ -1611,7 +1627,13 @@ fn pick_div(freq: u32, max: u32, divs: &[u32]) -> Option<u32> {
 
 fn synth_h7_node(plan: &H7Plan) -> DslNode {
     let mut props = vec![
-        prop("source", PropValue::Str(LitStr::new("hsi", Span::call_site()))),
+        prop(
+            "source",
+            PropValue::Str(LitStr::new(
+                if plan.source_hse { "hse" } else { "hsi" },
+                Span::call_site(),
+            )),
+        ),
         prop(
             "pll1",
             PropValue::Array(vec![plan.prediv, plan.mul, plan.divp]),
@@ -1651,8 +1673,13 @@ fn synth_h7_node(plan: &H7Plan) -> DslNode {
 
 fn synth_f4_node(plan: &F4Plan) -> DslNode {
     let mut props = vec![
-        prop("source", PropValue::Str(LitStr::new("hse", Span::call_site()))),
-        prop("hse", PropValue::U32(LitInt::new(&plan.hse.to_string(), Span::call_site()))),
+        prop(
+            "source",
+            PropValue::Str(LitStr::new(
+                if plan.source_hse { "hse" } else { "hsi" },
+                Span::call_site(),
+            )),
+        ),
         prop(
             "pll",
             PropValue::Array(vec![plan.prediv, plan.mul, plan.divp, plan.divq]),
@@ -1665,6 +1692,9 @@ fn synth_f4_node(plan: &F4Plan) -> DslNode {
         prop("apb1", PropValue::U32(LitInt::new(&plan.apb1.to_string(), Span::call_site()))),
         prop("apb2", PropValue::U32(LitInt::new(&plan.apb2.to_string(), Span::call_site()))),
     ];
+    if plan.source_hse {
+        props.push(prop("hse", PropValue::U32(LitInt::new(&plan.hse.to_string(), Span::call_site()))));
+    }
     if plan.usb48 {
         props.push(prop(
             "clk48",
@@ -2116,19 +2146,29 @@ mod tests {
 
     #[test]
     fn intent_h7_400mhz() {
-        let p = plan_h7(400_000_000, Some(48_000_000)).unwrap();
+        let p = plan_h7(400_000_000, Some(48_000_000), None).unwrap();
         assert_eq!((p.prediv, p.mul, p.divp), (4, 25, 1));
         assert_eq!((p.ahb, p.apb), (2, 2));
         assert!(p.scale1);
         assert!(p.usb48);
+        assert!(!p.source_hse);
     }
 
     #[test]
     fn intent_h7_550mhz_uses_scale0() {
-        let p = plan_h7(550_000_000, None).unwrap();
+        let p = plan_h7(550_000_000, None, None).unwrap();
         assert_eq!((p.prediv, p.mul, p.divp), (32, 275, 1));
         assert!(!p.scale1);
         assert!(!p.usb48);
+    }
+
+    #[test]
+    fn intent_h7_550mhz_with_hse() {
+        // 8 MHz 外部晶振：VCO=550M, prediv=4, mul=275, divp=1。
+        let p = plan_h7(550_000_000, None, Some(8_000_000)).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divp), (4, 275, 1));
+        assert!(p.source_hse);
+        assert!(!p.scale1);
     }
 
     #[test]
@@ -2136,6 +2176,16 @@ mod tests {
         let p = plan_f4(96_000_000, Some(48_000_000), Some(25_000_000)).unwrap();
         assert_eq!((p.prediv, p.mul, p.divp, p.divq), (25, 192, 2, 4));
         assert_eq!((p.ahb, p.apb1, p.apb2), (1, 2, 1));
+        assert!(p.usb48);
+        assert!(p.source_hse);
+    }
+
+    #[test]
+    fn intent_f4_96mhz_hsi_no_crystal() {
+        // 无晶振：内部 HSI 16 MHz，VCO=192M（F4 的 PLLM 最小为 2）。
+        let p = plan_f4(96_000_000, Some(48_000_000), None).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divp, p.divq), (2, 24, 2, 4));
+        assert!(!p.source_hse);
         assert!(p.usb48);
     }
 
@@ -2150,6 +2200,7 @@ mod tests {
         let p = plan_f4(100_000_000, None, Some(25_000_000)).unwrap();
         assert_eq!((p.prediv, p.mul, p.divp), (2, 16, 2));
         assert!(!p.usb48);
+        assert!(p.source_hse);
     }
 #[cfg(test)]
 fn clock_node(props: &[(&str, PropValue)]) -> DslNode {
