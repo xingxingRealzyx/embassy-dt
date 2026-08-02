@@ -46,6 +46,7 @@ mod kw {
     syn::custom_keyword!(gpio);
     syn::custom_keyword!(periph);
     syn::custom_keyword!(chip);
+    syn::custom_keyword!(node);
 }
 
 /// `device_tree!` 宏：解析设备树（Rust DSL 或 DTS/DTSI 文件），编译期校验，
@@ -189,14 +190,15 @@ impl Parse for DslTree {
 
 impl Parse for DslNode {
     fn parse(input: ParseStream) -> Result<Self> {
-        let (is_bus, is_device, is_gpio, is_periph) = (
+        let (is_bus, is_device, is_gpio, is_periph, is_node) = (
             input.peek(kw::bus),
             input.peek(kw::device),
             input.peek(kw::gpio),
             input.peek(kw::periph),
+            input.peek(kw::node),
         );
-        if !is_bus && !is_device && !is_gpio && !is_periph {
-            return Err(input.error("expected `bus`, `device`, `gpio` or `periph`"));
+        if !is_bus && !is_device && !is_gpio && !is_periph && !is_node {
+            return Err(input.error("expected `bus`, `device`, `gpio`, `periph` or `node`"));
         }
         if is_bus {
             input.parse::<kw::bus>()?;
@@ -204,11 +206,38 @@ impl Parse for DslNode {
             input.parse::<kw::device>()?;
         } else if is_gpio {
             input.parse::<kw::gpio>()?;
-        } else {
+        } else if is_periph {
             input.parse::<kw::periph>()?;
+        } else {
+            input.parse::<kw::node>()?;
         }
 
         let id: Ident = input.parse()?;
+
+        if is_node {
+            // `node clock { ... };` —— 文档性节点（无类型、无 driver）。
+            let content;
+            braced!(content in input);
+            let props: Punctuated<DslProp, Token![,]> =
+                content.parse_terminated(DslProp::parse, Token![,])?;
+            let props: Vec<DslProp> = props.into_iter().collect();
+            let deps: Vec<Ident> = props
+                .iter()
+                .filter_map(|p| match &p.value {
+                    PropValue::Ref(ident) => Some(ident.clone()),
+                    _ => None,
+                })
+                .collect();
+            input.parse::<Option<Token![;]>>()?;
+            return Ok(Self {
+                id,
+                kind: NodeKindAst::Device,
+                driver: None,
+                props,
+                deps,
+            });
+        }
+
         input.parse::<Token![:]>()?;
 
         let (kind, driver) = if is_bus {
@@ -340,6 +369,27 @@ impl DslNode {
                 PropValue::U32(lit) => lit.base10_parse().ok(),
                 _ => None,
             })
+    }
+
+    /// 数组属性（DTS 的 `<a b c>` 多元素）。
+    fn prop_array(&self, key: &str) -> Option<&[u32]> {
+        match self.prop(key).map(|p| &p.value) {
+            Some(PropValue::Array(v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    fn prop_str_opt(&self, key: &str) -> Result<Option<String>> {
+        match self.prop(key) {
+            None => Ok(None),
+            Some(prop) => match &prop.value {
+                PropValue::Str(s) => Ok(Some(s.value())),
+                _ => Err(syn::Error::new(
+                    prop.key.span(),
+                    format!("prop `{key}` must be a string"),
+                )),
+            },
+        }
     }
 
     /// 布尔属性：DTS 的 `exti;`（Bool）或 DSL 的 `exti: 1` / `exti: "true"`。
@@ -1242,6 +1292,8 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
         }
     };
 
+    let clock_tokens = clock_config_tokens(tree)?;
+
     Ok(quote! {
         /// 由 `device_tree!` 为 STM32 后端生成的类型化板级结构。
         #[allow(non_upper_case_globals)]
@@ -1264,6 +1316,8 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
         #(#statics)*
 
         #device_tokens
+
+        #clock_tokens
     })
 }
 
@@ -1284,6 +1338,280 @@ fn chip_name(tree: &DslTree) -> Result<Option<String>> {
         .chip
         .as_ref()
         .map(|lit| lit.value()))
+}
+
+/// 设备树 `clock` 节点 → `clock_config()` 函数。
+///
+/// v1 语法（DTS 根节点下的 `clock {}` 子节点）：
+///
+/// ```dts
+/// clock {
+///     source = "hsi";              // PLL 源：hsi / csi / hse
+///     pll1 = <4 50 2>;             // H7：<prediv mul divp [divq [divr]]>
+///     sys = "pll1_p";
+///     ahb = <2>; apb1 = <2>;       // 总线分频
+///     usb = "hsi48";               // H7 USB 时钟源
+///     hsi48;                       // 启用 HSI48（sync from USB）
+///     voltage = "scale1";
+/// };
+/// ```
+fn clock_config_tokens(tree: &DslTree) -> Result<TokenStream2> {
+    let Some(clock) = tree.nodes.iter().find(|n| n.id == "clock") else {
+        return Ok(TokenStream2::new());
+    };
+    let stmts = match chip_name(tree)? {
+        Some(chip) if chip.contains("h723") => h7_clock_config(clock)?,
+        Some(chip) if chip.contains("f411") => f4_clock_config(clock)?,
+        _ => {
+            return Err(syn::Error::new(
+                clock.id.span(),
+                "stm32 backend: `clock` node is not supported for this chip",
+            ))
+        }
+    };
+    Ok(quote! {
+        /// 由 `device_tree!` 生成的时钟配置（传给 `embassy_stm32::init`）。
+        pub fn clock_config() -> ::embassy_stm32::Config {
+            let mut config = ::embassy_stm32::Config::default();
+            #(#stmts)*
+            config
+        }
+    })
+}
+
+fn h7_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
+    let mut stmts = Vec::new();
+
+    if let Some(hsi) = node.prop_str_opt("hsi")? {
+        let v = match hsi.as_str() {
+            "div1" => quote!(DIV1),
+            "div2" => quote!(DIV2),
+            "div4" => quote!(DIV4),
+            "div8" => quote!(DIV8),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `hsi` value `{other}` (div1/div2/div4/div8)"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.hsi = Some(::embassy_stm32::rcc::HSIPrescaler::#v);
+        });
+    }
+    if node.prop_bool("csi") {
+        stmts.push(quote! { config.rcc.csi = true; });
+    }
+    if node.prop_bool("hsi48") {
+        stmts.push(quote! {
+            config.rcc.hsi48 = Some(::embassy_stm32::rcc::Hsi48Config { sync_from_usb: true });
+        });
+    }
+    if let Some(pll) = node.prop_array("pll1") {
+        if pll.len() < 3 {
+            return Err(syn::Error::new(
+                node.id.span(),
+                "clock: `pll1` needs at least <prediv mul divp>",
+            ));
+        }
+        let source = node.prop_str_opt("source")?.ok_or_else(|| {
+            syn::Error::new(node.id.span(), "clock: `source` is required with `pll1`")
+        })?;
+        let src = match source.as_str() {
+            "hsi" => quote!(HSI),
+            "csi" => quote!(CSI),
+            "hse" => quote!(HSE),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `source` `{other}` (hsi/csi/hse)"),
+                ))
+            }
+        };
+        let pre = format_ident!("DIV{}", pll[0]);
+        let mul = format_ident!("MUL{}", pll[1]);
+        let divp = format_ident!("DIV{}", pll[2]);
+        let divq = match pll.get(3) {
+            Some(n) => {
+                let v = format_ident!("DIV{}", n);
+                quote!(Some(::embassy_stm32::rcc::PllDiv::#v))
+            }
+            None => quote!(None),
+        };
+        let divr = match pll.get(4) {
+            Some(n) => {
+                let v = format_ident!("DIV{}", n);
+                quote!(Some(::embassy_stm32::rcc::PllDiv::#v))
+            }
+            None => quote!(None),
+        };
+        stmts.push(quote! {
+            config.rcc.pll1 = Some(::embassy_stm32::rcc::Pll {
+                source: ::embassy_stm32::rcc::PllSource::#src,
+                prediv: ::embassy_stm32::rcc::PllPreDiv::#pre,
+                mul: ::embassy_stm32::rcc::PllMul::#mul,
+                divp: Some(::embassy_stm32::rcc::PllDiv::#divp),
+                divq: #divq,
+                divr: #divr,
+            });
+        });
+    }
+    if let Some(sys) = node.prop_str_opt("sys")? {
+        let v = match sys.as_str() {
+            "hsi" => quote!(HSI),
+            "csi" => quote!(CSI),
+            "hse" => quote!(HSE),
+            "pll1_p" => quote!(PLL1_P),
+            "pll2_p" => quote!(PLL2_P),
+            "pll3_p" => quote!(PLL3_P),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `sys` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.sys = ::embassy_stm32::rcc::Sysclk::#v; });
+    }
+    if let Some(n) = node.prop_u32_any(&["ahb"]) {
+        let v = format_ident!("DIV{}", n);
+        stmts.push(quote! { config.rcc.ahb_pre = ::embassy_stm32::rcc::AHBPrescaler::#v; });
+    }
+    for key in ["apb1", "apb2", "apb3", "apb4"] {
+        if let Some(n) = node.prop_u32_any(&[key]) {
+            let field = format_ident!("{}_pre", key);
+            let v = format_ident!("DIV{}", n);
+            stmts.push(quote! { config.rcc.#field = ::embassy_stm32::rcc::APBPrescaler::#v; });
+        }
+    }
+    if let Some(usb) = node.prop_str_opt("usb")? {
+        let v = match usb.as_str() {
+            "disable" => quote!(DISABLE),
+            "pll1_q" => quote!(PLL1_Q),
+            "pll3_q" => quote!(PLL3_Q),
+            "hsi48" => quote!(HSI48),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `usb` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.mux.usbsel = ::embassy_stm32::rcc::mux::Usbsel::#v; });
+    }
+    if let Some(voltage) = node.prop_str_opt("voltage")? {
+        let v = match voltage.as_str() {
+            "scale0" => quote!(Scale0),
+            "scale1" => quote!(Scale1),
+            "scale2" => quote!(Scale2),
+            "scale3" => quote!(Scale3),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `voltage` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.voltage_scale = ::embassy_stm32::rcc::VoltageScale::#v; });
+    }
+    Ok(stmts)
+}
+
+fn f4_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
+    let mut stmts = Vec::new();
+
+    if let Some(hse) = node.prop_u32_any(&["hse"]) {
+        let mode = match node.prop_str_opt("hse-mode")?.as_deref() {
+            None | Some("oscillator") => quote!(Oscillator),
+            Some("bypass") => quote!(Bypass),
+            Some(other) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `hse-mode` `{other}` (oscillator/bypass)"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.hse = Some(::embassy_stm32::rcc::Hse {
+                freq: ::embassy_stm32::time::Hertz(#hse),
+                mode: ::embassy_stm32::rcc::HseMode::#mode,
+            });
+        });
+    }
+    if let Some(pll) = node.prop_array("pll") {
+        if pll.len() < 4 {
+            return Err(syn::Error::new(
+                node.id.span(),
+                "clock: `pll` needs <prediv mul divp divq>",
+            ));
+        }
+        let source = node.prop_str_opt("source")?.ok_or_else(|| {
+            syn::Error::new(node.id.span(), "clock: `source` is required with `pll`")
+        })?;
+        let src = match source.as_str() {
+            "hse" => quote!(HSE),
+            "hsi" => quote!(HSI),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `source` `{other}` (hse/hsi)"),
+                ))
+            }
+        };
+        let pre = format_ident!("DIV{}", pll[0]);
+        let mul = format_ident!("MUL{}", pll[1]);
+        let divp = format_ident!("DIV{}", pll[2]);
+        let divq = format_ident!("DIV{}", pll[3]);
+        stmts.push(quote! {
+            config.rcc.pll_src = ::embassy_stm32::rcc::PllSource::#src;
+            config.rcc.pll = Some(::embassy_stm32::rcc::Pll {
+                prediv: ::embassy_stm32::rcc::PllPreDiv::#pre,
+                mul: ::embassy_stm32::rcc::PllMul::#mul,
+                divp: Some(::embassy_stm32::rcc::PllPDiv::#divp),
+                divq: Some(::embassy_stm32::rcc::PllQDiv::#divq),
+                divr: None,
+            });
+        });
+    }
+    if let Some(sys) = node.prop_str_opt("sys")? {
+        let v = match sys.as_str() {
+            "hsi" => quote!(HSI),
+            "hse" => quote!(HSE),
+            "pll1_p" => quote!(PLL1_P),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `sys` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.sys = ::embassy_stm32::rcc::Sysclk::#v; });
+    }
+    if let Some(n) = node.prop_u32_any(&["ahb"]) {
+        let v = format_ident!("DIV{}", n);
+        stmts.push(quote! { config.rcc.ahb_pre = ::embassy_stm32::rcc::AHBPrescaler::#v; });
+    }
+    for key in ["apb1", "apb2"] {
+        if let Some(n) = node.prop_u32_any(&[key]) {
+            let field = format_ident!("{}_pre", key);
+            let v = format_ident!("DIV{}", n);
+            stmts.push(quote! { config.rcc.#field = ::embassy_stm32::rcc::APBPrescaler::#v; });
+        }
+    }
+    if let Some(clk48) = node.prop_str_opt("clk48")? {
+        let v = match clk48.as_str() {
+            "pll1_q" => quote!(PLL1_Q),
+            "pll_sai_q" => quote!(PLLSAI1_Q),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `clk48` `{other}` (pll1_q/pll_sai_q)"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.mux.clk48sel = ::embassy_stm32::rcc::mux::Clk48sel::#v; });
+    }
+    Ok(stmts)
 }
 
 /// 把 `"DMA1_CH0"` 这类通道名转成对应的中断名（H7/F4 风格 `DMA1_STREAM0`）；
@@ -1409,6 +1737,100 @@ mod tests {
     fn parse(input: &str) -> Result<DslTree> {
         syn::parse_str(input)
     }
+
+    #[test]
+    fn stm32_backend_generates_h7_clock_config() {
+        let clock = clock_node(&[
+            ("source", PropValue::Str(LitStr::new("hsi", Span::call_site()))),
+            ("hsi", PropValue::Str(LitStr::new("div1", Span::call_site()))),
+            ("csi", PropValue::Bool(true)),
+            ("hsi48", PropValue::Bool(true)),
+            ("pll1", PropValue::Array(vec![4, 50, 2])),
+            ("sys", PropValue::Str(LitStr::new("pll1_p", Span::call_site()))),
+            ("ahb", PropValue::U32(LitInt::new("2", Span::call_site()))),
+            ("apb1", PropValue::U32(LitInt::new("2", Span::call_site()))),
+            ("usb", PropValue::Str(LitStr::new("hsi48", Span::call_site()))),
+            (
+                "voltage",
+                PropValue::Str(LitStr::new("scale1", Span::call_site())),
+            ),
+        ]);
+        let stmts = h7_clock_config(&clock).unwrap();
+        let tokens = quote!(#(#stmts)*).to_string().replace(' ', "");
+        assert!(tokens.contains("HSIPrescaler::DIV1"));
+        assert!(tokens.contains("PllSource::HSI"));
+        assert!(tokens.contains("PllMul::MUL50"));
+        assert!(tokens.contains("Sysclk::PLL1_P"));
+        assert!(tokens.contains("Usbsel::HSI48"));
+        assert!(tokens.contains("VoltageScale::Scale1"));
+    }
+
+    #[test]
+    fn stm32_backend_generates_f4_clock_config() {
+        let clock = clock_node(&[
+            ("source", PropValue::Str(LitStr::new("hse", Span::call_site()))),
+            ("hse", PropValue::U32(LitInt::new("25000000", Span::call_site()))),
+            ("pll", PropValue::Array(vec![4, 168, 2, 7])),
+            ("sys", PropValue::Str(LitStr::new("pll1_p", Span::call_site()))),
+            ("ahb", PropValue::U32(LitInt::new("1", Span::call_site()))),
+            (
+                "clk48",
+                PropValue::Str(LitStr::new("pll1_q", Span::call_site())),
+            ),
+        ]);
+        let stmts = f4_clock_config(&clock).unwrap();
+        let tokens = quote!(#(#stmts)*).to_string().replace(' ', "");
+        assert!(tokens.contains("HseMode::Oscillator"));
+        assert!(tokens.contains("PllSource::HSE"));
+        assert!(tokens.contains("PllMul::MUL168"));
+        assert!(tokens.contains("PllQDiv::DIV7"));
+        assert!(tokens.contains("Clk48sel::PLL1_Q"));
+    }
+
+    #[test]
+    fn clock_requires_source_with_pll() {
+        let clock = clock_node(&[("pll1", PropValue::Array(vec![4, 50, 2]))]);
+        let err = h7_clock_config(&clock).unwrap_err();
+        assert!(err.to_string().contains("`source` is required"));
+    }
+
+    #[test]
+    fn parses_node_keyword_in_dsl() {
+        let tree = parse(
+            r#"
+            node note { source: "hsi" };
+        "#,
+        )
+        .unwrap();
+        assert_eq!(tree.nodes.len(), 1);
+        assert!(tree.nodes[0].driver.is_none());
+    }
+#[cfg(test)]
+fn clock_node(props: &[(&str, PropValue)]) -> DslNode {
+    DslNode {
+        id: Ident::new("clock", Span::call_site()),
+        kind: NodeKindAst::Device,
+        driver: None,
+        props: props
+            .iter()
+            .map(|(k, v)| DslProp {
+                key: Ident::new(k, Span::call_site()),
+                value: match v {
+                    PropValue::Str(s) => {
+                        PropValue::Str(LitStr::new(&s.value(), s.span()))
+                    }
+                    PropValue::U32(l) => {
+                    PropValue::U32(LitInt::new(l.base10_digits(), l.span()))
+                    }
+                    PropValue::Ref(i) => PropValue::Ref(Ident::new(&i.to_string(), i.span())),
+                    PropValue::Array(v) => PropValue::Array(v.clone()),
+                    PropValue::Bool(b) => PropValue::Bool(*b),
+                },
+            })
+            .collect(),
+        deps: Vec::new(),
+    }
+}
 
     #[test]
     fn parses_tree_with_all_node_kinds() {
@@ -1613,19 +2035,6 @@ mod tests {
         assert!(!tokens.contains("ADC=>"));
         assert!(tokens.contains("Crc::new"));
         assert!(!tokens.contains("PolySize"));
-    }
-
-    #[test]
-    fn stm32_backend_rejects_bad_gpio_level() {
-        let tree = parse(
-            r#"
-            backend stm32;
-            gpio led0: Out { pin: "PC13", level: "medium" };
-        "#,
-        )
-        .unwrap();
-        let err = expand(tree).unwrap_err();
-        assert!(err.to_string().contains("`level` must be `high` or `low`"));
     }
 
 }

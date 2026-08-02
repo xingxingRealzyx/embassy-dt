@@ -222,13 +222,25 @@ cargo check --offline --target thumbv7em-none-eabihf \
 
 ### 真机运行注意（时钟配置）
 
-所有示例现在都通过 `examples/common/clock.rs` 提供参考时钟配置：
+时钟配置已经设备树化：DTS 根节点下的 `clock {}` 子节点声明时钟树，
+宏生成 `clock_config()` 函数（应用直接 `init(clock_config())`）：
 
-- H723：HSI + PLL1 → 400 MHz，HSI48（`sync_from_usb`）供 USB/RNG
-- F411：25 MHz HSE + PLL → 168 MHz，PLLQ 48 MHz 供 USB
+```dts
+clock {
+    source = "hsi";          // PLL 源：hsi / csi / hse
+    pll1 = <4 50 2>;         // H7：<prediv mul divp [divq [divr]]>
+    sys = "pll1_p";
+    ahb = <2>; apb1 = <2>;   // 总线分频
+    usb = "hsi48";           // H7 USB 时钟源
+    hsi48;                   // 启用 HSI48（sync from USB）
+    voltage = "scale1";
+};
+```
 
-之前示例用 `init(Default::default())`，编译没问题但真机上 USB/RNG/SDMMC
-等外设时钟不对。不同板子请按实际晶振调整 `clock_config()`。
+当前示例：H723（HSI + PLL1 → 400 MHz，HSI48 供 USB/RNG）、F411
+（25 MHz HSE + PLL → 168 MHz，PLLQ 48 MHz 供 USB）。不同板子改 DTS
+即可，应用代码里没有时钟代码。
+
 目前全部示例只做过交叉编译验证，**尚未在真实硬件上烧录测试**。
 
 ### 错误定位

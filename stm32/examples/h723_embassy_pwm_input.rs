@@ -13,9 +13,6 @@ use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_time::Timer;
 use panic_probe as _;
 
-#[path = "common/clock.rs"]
-mod clock;
-
 device_tree! {
     name "nucleo-h723zi";
     backend stm32;
@@ -25,7 +22,7 @@ device_tree! {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let p = embassy_stm32::init(clock::clock_config());
+    let p = embassy_stm32::init(clock_config());
     let board = Board::init(p);
 
     // 信号源：设备树里的裸引脚。

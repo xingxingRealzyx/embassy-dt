@@ -12,9 +12,6 @@
 
 use embassy_dt::device_tree;
 
-#[path = "common/clock.rs"]
-mod clock;
-
 #[path = "common/app.rs"]
 mod app;
 
@@ -32,6 +29,6 @@ device_tree! {
 
 #[embassy_executor::main]
 async fn main(_spawner: embassy_executor::Spawner) {
-    let mut board = Board::init(embassy_stm32::init(clock::clock_config()));
+    let mut board = Board::init(embassy_stm32::init(clock_config()));
     app::heartbeat(&mut board.led0).await;
 }

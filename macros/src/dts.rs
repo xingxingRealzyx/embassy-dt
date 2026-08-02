@@ -833,13 +833,16 @@ impl<'a> Parser<'a> {
                     {
                         self.pos += 1;
                         self.property(&mut node, is_root, normalize_key(&first))?;
-                    } else if self.peek() == &Tok::Punct('@') || self.peek() == &Tok::Punct('{') {
-                        // 无标签子节点
-                        let child_name = if self.peek() == &Tok::Punct('@') {
-                            self.pos += 1;
+                    } else if self.peek2() == &Tok::Punct('@')
+                        || self.peek2() == &Tok::Punct('{')
+                    {
+                        // 无标签子节点：`name { ... }` 或 `name@addr { ... }`
+                        let child_name = if self.peek2() == &Tok::Punct('@') {
+                            self.pos += 2;
                             let addr = self.expect_num()?;
                             format!("{first}@{addr}")
                         } else {
+                            self.pos += 1;
                             first
                         };
                         let child_path = join_path(&path, &child_name);

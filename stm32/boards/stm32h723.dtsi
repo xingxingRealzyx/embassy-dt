@@ -4,6 +4,23 @@
 // 引脚 / DMA / 频率 —— 这就是「配置写一次，换板只改差异」的 overlay 语义。
 
 / {
+    clock {
+        // 参考时钟：HSI + PLL1 → 400 MHz，HSI48 供 USB / RNG。
+        source = "hsi";
+        hsi = "div1";
+        csi;
+        hsi48;
+        pll1 = <4 50 2>;
+        sys = "pll1_p";
+        ahb = <2>;
+        apb1 = <2>;
+        apb2 = <2>;
+        apb3 = <2>;
+        apb4 = <2>;
+        usb = "hsi48";
+        voltage = "scale1";
+    };
+
     i2c0: i2c@40005400 {
         compatible = "embassy-dt,bus-i2c";
         periph = "I2C1";

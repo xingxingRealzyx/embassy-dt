@@ -15,9 +15,6 @@ use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use panic_probe as _;
 
-#[path = "common/clock.rs"]
-mod clock;
-
 device_tree! {
     name "nucleo-h723zi";
     backend stm32;
@@ -28,7 +25,7 @@ device_tree! {
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     info!("Hello World!");
-    let p = embassy_stm32::init(clock::clock_config());
+    let p = embassy_stm32::init(clock_config());
     let board = Board::init(p);
 
     // 驱动由设备树生成（含静态端点缓冲），这里直接取出。

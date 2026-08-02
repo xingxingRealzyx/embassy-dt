@@ -12,9 +12,6 @@ use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_time::Timer;
 use panic_probe as _;
 
-#[path = "common/clock.rs"]
-mod clock;
-
 device_tree! {
     name "blackpill-f411ce";
     backend stm32;
@@ -24,7 +21,7 @@ device_tree! {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let p = embassy_stm32::init(clock::clock_config());
+    let p = embassy_stm32::init(clock_config());
     let board = Board::init(p);
 
     let mut src = Output::new(board.pwm_src, Level::High, Speed::Low);

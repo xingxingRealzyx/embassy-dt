@@ -18,8 +18,6 @@ use embassy_usb::control::OutResponse;
 use embassy_usb::Builder;
 use panic_probe as _;
 
-#[path = "common/clock.rs"]
-mod clock;
 use usbd_hid::descriptor::{MouseReport, SerializedDescriptor};
 
 device_tree! {
@@ -33,7 +31,7 @@ static HID_PROTOCOL_MODE: AtomicU8 = AtomicU8::new(HidProtocolMode::Boot as u8);
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let p = embassy_stm32::init(clock::clock_config());
+    let p = embassy_stm32::init(clock_config());
     let board = Board::init(p);
 
     let driver = board.usb0;
