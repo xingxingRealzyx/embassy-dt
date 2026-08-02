@@ -5,20 +5,9 @@
 
 / {
     clock {
-        // 参考时钟：HSI + PLL1 → 400 MHz，HSI48 供 USB / RNG。
-        source = "hsi";
-        hsi = "div1";
-        csi;
-        hsi48;
-        pll1 = <4 50 2>;
-        sys = "pll1_p";
-        ahb = <2>;
-        apb1 = <2>;
-        apb2 = <2>;
-        apb3 = <2>;
-        apb4 = <2>;
-        usb = "hsi48";
-        voltage = "scale1";
+        // 意图式：宏自动计算 PLL（HSI + PLL1 → 400 MHz，HSI48 供 USB）。
+        system = <400000000>;
+        usb = <48000000>;
     };
 
     i2c0: i2c@40005400 {

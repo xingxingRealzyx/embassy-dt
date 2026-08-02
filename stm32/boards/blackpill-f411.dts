@@ -5,15 +5,11 @@
     compatible = "weact,blackpill-f411ce";
 
     clock {
-        // 参考时钟：25 MHz HSE + PLL → 168 MHz，PLLQ 48 MHz 供 USB。
-        source = "hse";
+        // 意图式：F411 最高 100 MHz；100 MHz + 48 MHz USB 无解
+        // （F4 无 HSI48），用 96 MHz 同时满足两者。
         hse = <25000000>;
-        pll = <4 168 2 7>;
-        sys = "pll1_p";
-        ahb = <1>;
-        apb1 = <4>;
-        apb2 = <2>;
-        clk48 = "pll1_q";
+        system = <96000000>;
+        usb = <48000000>;
     };
 
     i2c0: i2c@40005400 {

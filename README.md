@@ -222,24 +222,24 @@ cargo check --offline --target thumbv7em-none-eabihf \
 
 ### 真机运行注意（时钟配置）
 
-时钟配置已经设备树化：DTS 根节点下的 `clock {}` 子节点声明时钟树，
-宏生成 `clock_config()` 函数（应用直接 `init(clock_config())`）：
+时钟配置已经设备树化，且支持**意图式**写法：只声明目标频率，宏根据
+芯片的 PLL VCO 范围自动计算分频/倍频，生成 `clock_config()` 函数
+（应用直接 `init(clock_config())`）：
 
 ```dts
 clock {
-    source = "hsi";          // PLL 源：hsi / csi / hse
-    pll1 = <4 50 2>;         // H7：<prediv mul divp [divq [divr]]>
-    sys = "pll1_p";
-    ahb = <2>; apb1 = <2>;   // 总线分频
-    usb = "hsi48";           // H7 USB 时钟源
-    hsi48;                   // 启用 HSI48（sync from USB）
-    voltage = "scale1";
+    system = <400000000>;    // 目标系统时钟（宏自动算 PLL/分频）
+    usb = <48000000>;        // USB 48 MHz（可选）
 };
 ```
 
-当前示例：H723（HSI + PLL1 → 400 MHz，HSI48 供 USB/RNG）、F411
-（25 MHz HSE + PLL → 168 MHz，PLLQ 48 MHz 供 USB）。不同板子改 DTS
-即可，应用代码里没有时钟代码。
+也保留 v1 显式写法（`source`/`pll1`/`pll`/`sys`/`ahb`/`apb*`/`usb`/
+`clk48`/`voltage`），意图式与显式互斥（混用会编译报错）。
+
+当前示例：H723（HSI + PLL1 → 400 MHz，HSI48 供 USB）、F411
+（25 MHz HSE → 96 MHz + PLLQ 48 MHz——F4 无 HSI48，100 MHz 系统无法
+同时满足 48 MHz USB，宏会提示改用 96 MHz；顺带修复了之前 F411 示例
+168 MHz 超频的问题）。不同板子改 DTS 即可，应用代码里没有时钟代码。
 
 目前全部示例只做过交叉编译验证，**尚未在真实硬件上烧录测试**。
 

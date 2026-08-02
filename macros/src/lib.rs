@@ -1359,6 +1359,10 @@ fn clock_config_tokens(tree: &DslTree) -> Result<TokenStream2> {
     let Some(clock) = tree.nodes.iter().find(|n| n.id == "clock") else {
         return Ok(TokenStream2::new());
     };
+    // v2 意图式：只写目标频率，宏自动计算 PLL/分频。
+    if let Some(sysclk) = clock.prop_u32_any(&["system"]) {
+        return intent_clock(tree, clock, sysclk);
+    }
     let stmts = match chip_name(tree)? {
         Some(chip) if chip.contains("h723") => h7_clock_config(clock)?,
         Some(chip) if chip.contains("f411") => f4_clock_config(clock)?,
@@ -1377,6 +1381,310 @@ fn clock_config_tokens(tree: &DslTree) -> Result<TokenStream2> {
             config
         }
     })
+}
+
+/// 意图式时钟：`system = <400000000>; usb = <48000000>;`
+/// 宏根据芯片的 PLL VCO 范围自动计算分频/倍频，再复用 v1 的代码生成。
+fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStream2> {
+    // 与 v1 显式属性互斥。
+    for key in ["pll1", "pll", "sys", "ahb", "apb1", "clk48"] {
+        if clock.prop(key).is_some() {
+            return Err(syn::Error::new(
+                clock.id.span(),
+                format!(
+                    "clock: cannot mix intent (`system`) with explicit property `{key}`"
+                ),
+            ));
+        }
+    }
+    let usb = clock.prop_u32_any(&["usb"]);
+    let hse = clock.prop_u32_any(&["hse"]);
+    let node = match chip_name(tree)? {
+        Some(chip) if chip.contains("h723") => {
+            let plan = plan_h7(sysclk, usb).map_err(|msg| {
+                syn::Error::new(clock.id.span(), format!("clock: {msg}"))
+            })?;
+            synth_h7_node(&plan)
+        }
+        Some(chip) if chip.contains("f411") => {
+            let plan = plan_f4(sysclk, usb, hse).map_err(|msg| {
+                syn::Error::new(clock.id.span(), format!("clock: {msg}"))
+            })?;
+            synth_f4_node(&plan)
+        }
+        _ => {
+            return Err(syn::Error::new(
+                clock.id.span(),
+                "stm32 backend: `clock` node is not supported for this chip",
+            ))
+        }
+    };
+    let stmts = match chip_name(tree)? {
+        Some(chip) if chip.contains("h723") => h7_clock_config(&node)?,
+        Some(chip) if chip.contains("f411") => f4_clock_config(&node)?,
+        _ => unreachable!(),
+    };
+    Ok(quote! {
+        /// 由 `device_tree!` 生成的时钟配置（意图式：按目标频率自动计算）。
+        pub fn clock_config() -> ::embassy_stm32::Config {
+            let mut config = ::embassy_stm32::Config::default();
+            #(#stmts)*
+            config
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// 意图式时钟算法（v2）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct H7Plan {
+    prediv: u32,
+    mul: u32,
+    divp: u32,
+    ahb: u32,
+    apb: u32,
+    scale1: bool,
+    usb48: bool,
+}
+
+/// STM32H7：HSI 64 MHz 输入，PLL1 VCO 192–836 MHz，PLLN 4–512，PLLM 1–64，
+/// PLLP 1–64；SYSCLK ≤ 550 MHz，AHB ≤ 275 MHz，APB ≤ 137.5 MHz。
+fn plan_h7(sysclk: u32, usb: Option<u32>) -> std::result::Result<H7Plan, String> {
+    const INPUT: u64 = 64_000_000;
+    const VCO_MIN: u64 = 192_000_000;
+    const VCO_MAX: u64 = 836_000_000;
+
+    if sysclk > 550_000_000 {
+        return Err(format!("system clock {sysclk} Hz exceeds H723 maximum (550 MHz)"));
+    }
+    if let Some(u) = usb {
+        if u != 48_000_000 {
+            return Err("only 48 MHz USB clock is supported".into());
+        }
+    }
+
+    // 找 VCO 最小的合法 (prediv, mul, divp)。
+    let mut best: Option<(u64, u32, u32, u32)> = None;
+    for divp in 1u32..=64 {
+        let vco = sysclk as u64 * divp as u64;
+        if !(VCO_MIN..=VCO_MAX).contains(&vco) {
+            continue;
+        }
+        for prediv in 1u32..=64 {
+            let num = vco * prediv as u64;
+            if num % INPUT != 0 {
+                continue;
+            }
+            let mul = num / INPUT;
+            if (4..=512).contains(&mul) {
+                let cand = (vco, prediv, mul as u32, divp);
+                if best.as_ref().map_or(true, |b| cand.0 < b.0) {
+                    best = Some(cand);
+                }
+            }
+        }
+    }
+    let (vco, prediv, mul, divp) = best
+        .ok_or_else(|| format!("cannot find a valid PLL1 config for {sysclk} Hz"))?;
+    let ahb = pick_div(sysclk, 275_000_000, &[1, 2, 4, 8, 16, 64, 128, 256, 512])
+        .ok_or("cannot satisfy AHB frequency limit")?;
+    let apb = pick_div(sysclk / ahb, 137_500_000, &[1, 2, 4, 8, 16])
+        .ok_or("cannot satisfy APB frequency limit")?;
+    let _ = vco;
+    Ok(H7Plan {
+        prediv,
+        mul,
+        divp,
+        ahb,
+        apb,
+        scale1: sysclk <= 400_000_000,
+        usb48: usb.is_some(),
+    })
+}
+
+#[derive(Debug)]
+struct F4Plan {
+    hse: u32,
+    prediv: u32,
+    mul: u32,
+    divp: u32,
+    divq: u32,
+    usb48: bool,
+    ahb: u32,
+    apb1: u32,
+    apb2: u32,
+}
+
+/// STM32F4（F411）：HSE 输入，PLL VCO 100–432 MHz，PLLM 2–63，PLLN 4–432，
+/// PLLP ∈ {2,4,6,8}，PLLQ 2–15；SYSCLK ≤ 100 MHz，AHB ≤ 100 MHz，
+/// APB1 ≤ 50 MHz，APB2 ≤ 100 MHz。
+///
+/// 注意：F4 没有 HSI48（embassy 未暴露），USB 48 MHz 只能来自 PLLQ——
+/// 因此 100 MHz 系统时钟无法同时提供 48 MHz USB（可改用 96 MHz）。
+fn plan_f4(
+    sysclk: u32,
+    usb: Option<u32>,
+    hse: Option<u32>,
+) -> std::result::Result<F4Plan, String> {
+    let input = hse.ok_or("F4 意图式时钟需要 `hse = <晶振频率>`")? as u64;
+    if sysclk > 100_000_000 {
+        return Err(format!(
+            "system clock {sysclk} Hz exceeds F411 maximum (100 MHz)"
+        ));
+    }
+    if let Some(u) = usb {
+        if u != 48_000_000 {
+            return Err("only 48 MHz USB clock is supported".into());
+        }
+    }
+
+    let mut best: Option<(u64, u32, u32, u32, u32)> = None;
+    for divp in [2u32, 4, 6, 8] {
+        let vco = sysclk as u64 * divp as u64;
+        if !(100_000_000..=432_000_000).contains(&vco) {
+            continue;
+        }
+        // PLLQ 若能提供 48 MHz（当 usb 需要时）。
+        let divq = match usb {
+            Some(u) => {
+                if vco % u as u64 == 0 {
+                    let q = vco / u as u64;
+                    if (2..=15).contains(&q) {
+                        Some(q as u32)
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+            None => Some(4),
+        };
+        for prediv in 2u32..=63 {
+            let num = vco * prediv as u64;
+            if num % input != 0 {
+                continue;
+            }
+            let mul = num / input;
+            if (4..=432).contains(&mul) {
+                let cand = (vco, prediv, mul as u32, divp, divq.unwrap_or(4));
+                if best.as_ref().map_or(true, |b| cand.0 < b.0) {
+                    best = Some(cand);
+                }
+            }
+        }
+    }
+    let (_, prediv, mul, divp, divq) = best.ok_or_else(|| {
+        format!(
+            "cannot find a valid PLL config for {sysclk} Hz{} on F4 \
+             (no HSI48; 100 MHz system cannot provide 48 MHz USB, try 96 MHz)",
+            usb.map(|_| " + 48 MHz USB").unwrap_or("")
+        )
+    })?;
+    let ahb = pick_div(sysclk, 100_000_000, &[1, 2, 4, 8, 16, 64, 128, 256, 512])
+        .ok_or("cannot satisfy AHB frequency limit")?;
+    let apb1 = pick_div(sysclk / ahb, 50_000_000, &[1, 2, 4, 8, 16])
+        .ok_or("cannot satisfy APB1 frequency limit")?;
+    let apb2 = pick_div(sysclk / ahb, 100_000_000, &[1, 2, 4, 8, 16])
+        .ok_or("cannot satisfy APB2 frequency limit")?;
+    Ok(F4Plan {
+        hse: input as u32,
+        prediv,
+        mul,
+        divp,
+        divq,
+        usb48: usb.is_some(),
+        ahb,
+        apb1,
+        apb2,
+    })
+}
+
+/// 最小分频使 freq/div ≤ max。
+fn pick_div(freq: u32, max: u32, divs: &[u32]) -> Option<u32> {
+    divs.iter()
+        .copied()
+        .find(|&d| freq / d <= max)
+}
+
+fn synth_h7_node(plan: &H7Plan) -> DslNode {
+    let mut props = vec![
+        prop("source", PropValue::Str(LitStr::new("hsi", Span::call_site()))),
+        prop(
+            "pll1",
+            PropValue::Array(vec![plan.prediv, plan.mul, plan.divp]),
+        ),
+        prop(
+            "sys",
+            PropValue::Str(LitStr::new("pll1_p", Span::call_site())),
+        ),
+        prop("ahb", PropValue::U32(LitInt::new(&plan.ahb.to_string(), Span::call_site()))),
+        prop("apb1", PropValue::U32(LitInt::new(&plan.apb.to_string(), Span::call_site()))),
+        prop("apb2", PropValue::U32(LitInt::new(&plan.apb.to_string(), Span::call_site()))),
+        prop("apb3", PropValue::U32(LitInt::new(&plan.apb.to_string(), Span::call_site()))),
+        prop("apb4", PropValue::U32(LitInt::new(&plan.apb.to_string(), Span::call_site()))),
+        prop(
+            "voltage",
+            PropValue::Str(LitStr::new(
+                if plan.scale1 { "scale1" } else { "scale0" },
+                Span::call_site(),
+            )),
+        ),
+    ];
+    if plan.usb48 {
+        props.push(prop("hsi48", PropValue::Bool(true)));
+        props.push(prop(
+            "usb",
+            PropValue::Str(LitStr::new("hsi48", Span::call_site())),
+        ));
+    }
+    DslNode {
+        id: Ident::new("clock", Span::call_site()),
+        kind: NodeKindAst::Device,
+        driver: None,
+        props,
+        deps: Vec::new(),
+    }
+}
+
+fn synth_f4_node(plan: &F4Plan) -> DslNode {
+    let mut props = vec![
+        prop("source", PropValue::Str(LitStr::new("hse", Span::call_site()))),
+        prop("hse", PropValue::U32(LitInt::new(&plan.hse.to_string(), Span::call_site()))),
+        prop(
+            "pll",
+            PropValue::Array(vec![plan.prediv, plan.mul, plan.divp, plan.divq]),
+        ),
+        prop(
+            "sys",
+            PropValue::Str(LitStr::new("pll1_p", Span::call_site())),
+        ),
+        prop("ahb", PropValue::U32(LitInt::new(&plan.ahb.to_string(), Span::call_site()))),
+        prop("apb1", PropValue::U32(LitInt::new(&plan.apb1.to_string(), Span::call_site()))),
+        prop("apb2", PropValue::U32(LitInt::new(&plan.apb2.to_string(), Span::call_site()))),
+    ];
+    if plan.usb48 {
+        props.push(prop(
+            "clk48",
+            PropValue::Str(LitStr::new("pll1_q", Span::call_site())),
+        ));
+    }
+    DslNode {
+        id: Ident::new("clock", Span::call_site()),
+        kind: NodeKindAst::Device,
+        driver: None,
+        props,
+        deps: Vec::new(),
+    }
+}
+
+fn prop(key: &str, value: PropValue) -> DslProp {
+    DslProp {
+        key: Ident::new(key, Span::call_site()),
+        value,
+    }
 }
 
 fn h7_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
@@ -1804,6 +2112,44 @@ mod tests {
         .unwrap();
         assert_eq!(tree.nodes.len(), 1);
         assert!(tree.nodes[0].driver.is_none());
+    }
+
+    #[test]
+    fn intent_h7_400mhz() {
+        let p = plan_h7(400_000_000, Some(48_000_000)).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divp), (4, 25, 1));
+        assert_eq!((p.ahb, p.apb), (2, 2));
+        assert!(p.scale1);
+        assert!(p.usb48);
+    }
+
+    #[test]
+    fn intent_h7_550mhz_uses_scale0() {
+        let p = plan_h7(550_000_000, None).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divp), (32, 275, 1));
+        assert!(!p.scale1);
+        assert!(!p.usb48);
+    }
+
+    #[test]
+    fn intent_f4_96mhz_with_usb() {
+        let p = plan_f4(96_000_000, Some(48_000_000), Some(25_000_000)).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divp, p.divq), (25, 192, 2, 4));
+        assert_eq!((p.ahb, p.apb1, p.apb2), (1, 2, 1));
+        assert!(p.usb48);
+    }
+
+    #[test]
+    fn intent_f4_100mhz_usb_impossible() {
+        let err = plan_f4(100_000_000, Some(48_000_000), Some(25_000_000)).unwrap_err();
+        assert!(err.contains("96 MHz"));
+    }
+
+    #[test]
+    fn intent_f4_100mhz_without_usb() {
+        let p = plan_f4(100_000_000, None, Some(25_000_000)).unwrap();
+        assert_eq!((p.prediv, p.mul, p.divp), (2, 16, 2));
+        assert!(!p.usb48);
     }
 #[cfg(test)]
 fn clock_node(props: &[(&str, PropValue)]) -> DslNode {
