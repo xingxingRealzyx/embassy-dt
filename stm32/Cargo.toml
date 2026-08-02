@@ -22,6 +22,8 @@ stm32h723zg = ["embassy-stm32/stm32h723zg"]
 stm32f411ce = ["embassy-stm32/stm32f411ce"]
 stm32l476rg = ["embassy-stm32/stm32l476rg"]
 stm32g474re = ["embassy-stm32/stm32g474re", "embassy-stm32/single-bank"]
+stm32f103c8 = ["embassy-stm32/stm32f103c8"]
+stm32f103re = ["embassy-stm32/stm32f103re"]
 
 [dev-dependencies]
 cortex-m-rt = "0.7"
@@ -176,6 +178,26 @@ required-features = ["stm32g474re"]
 [[example]]
 name = "g474_embassy_adc"
 required-features = ["stm32g474re"]
+
+[[example]]
+name = "f103_bluepill"
+required-features = ["stm32f103c8"]
+
+[[example]]
+name = "f103_driver_bme280"
+required-features = ["stm32f103c8"]
+
+[[example]]
+name = "f103_embassy_can"
+required-features = ["stm32f103re"]
+
+[[example]]
+name = "f103_embassy_usb_serial"
+required-features = ["stm32f103c8"]
+
+[[example]]
+name = "f103_embassy_adc"
+required-features = ["stm32f103c8"]
 
 [[example]]
 name = "h723_embassy_spi_shared"

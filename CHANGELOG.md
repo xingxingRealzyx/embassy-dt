@@ -36,13 +36,21 @@
     HSI48/CRS 供 USB、ADC 内核走 SYS）、DMA 中断 `DMA1_CHANNELn`、
     usb_v1（非 OTG）分支、adc_g4（带 `AdcConfig`）分支、
     `adc12`/`fdcan`/`clk48` mux 覆盖属性
+  - F1 支持：意图式时钟（PLL 直接输出 ≤ 72 MHz，HSI 上限 64 MHz；
+    USB 要求 PLL=72/48 MHz；ADC 走 PCLK2÷adc_pre）、
+    AFIO 引脚默认 remap 0（消除 `PwmPin` 的 A 泛型歧义）、
+    ADC1_2 中断绑定、bxCAN 合并中断名（`USB_HP_CAN1_TX` 等）、
+    DMA 中断 `DMA1_CHANNELn`
 
 ### STM32 后端（embassy-dt-stm32）
 
-- 芯片：STM32H723ZG（默认）、STM32F411CE、STM32L476RG、STM32G474RE
+- 芯片：STM32H723ZG（默认）、STM32F411CE、STM32L476RG、STM32G474RE、
+  STM32F103C8、STM32F103RE
 - 板级 DTS：Nucleo-H723ZI、自定义 H723、BlackPill-F411、Nucleo-L476RG、
-  Nucleo-G474RE（含 FDCAN 专用 overlay：I2C1→I2C2，PB8/PB9 让给 FDCAN1）
-- 示例：34 个固件（对照 embassy 官方示例重写 + 驱动闭环演示）
+  Nucleo-G474RE（含 FDCAN 专用 overlay：I2C1→I2C2，PB8/PB9 让给 FDCAN1）、
+  BluePill-F103C8、Nucleo-F103RB（`/delete-node/` overlay：删 usb0/spi0
+  后把 PB8/PB9 给 CAN1）
+- 示例：39 个固件（对照 embassy 官方示例重写 + 驱动闭环演示）
 
 ### 驱动（embassy-dt-bme280）
 

@@ -1,4 +1,4 @@
-error: stm32 backend: `can` is not supported for this chip (declare `chip "stm32h723zg"` / `chip "stm32g474re"` or a F4/F1 chip with bxCAN)
+error: stm32 backend: `can` is not supported for this chip (declare `chip "stm32h723zg"` / `chip "stm32g474re"` / `chip "stm32f103c8"` or a F4 chip with bxCAN)
  --> tests/ui/periph_requires_chip.rs:7:12
   |
 7 |     periph can0: Can { periph: "FDCAN1", rx: "PA11", tx: "PA12" };

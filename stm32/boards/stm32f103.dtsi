@@ -1,0 +1,94 @@
+// STM32F103（C8，中容量）芯片级基础配置。
+//
+// F1 的特殊性：
+// - 无 DMAMUX：DMA 通道是固定映射（I2C1=CH6/7、SPI1=CH3/2、USART1=CH4/5），
+//   dts 里写错通道会被类型系统直接拦截；
+// - USB 与 CAN1 共享中断向量（USB_LP_CAN1_RX0），不能在同一棵树里共存；
+// - 无 RNG / DAC / SDMMC；ADC 需要 ADC1_2 中断；USB 时钟由 PLL 派生。
+
+/ {
+    clock {
+        // 意图式：宏自动计算 PLL。
+        // BluePill 板载 8 MHz 晶振：PLL = 8M ÷1 ×9 = 72 MHz，
+        // USB 由 PLL ÷1.5 派生 48 MHz；ADC 走 PCLK2 ÷6 = 12 MHz。
+        system = <72000000>;
+        usb = <48000000>;
+        hse = <8000000>;
+        adc = <14000000>;
+    };
+
+    i2c0: i2c@40005400 {
+        compatible = "embassy-dt,bus-i2c";
+        periph = "I2C1";
+        scl = "PB6";
+        sda = "PB7";
+        dma-tx = "DMA1_CH6";
+        dma-rx = "DMA1_CH7";
+        frequency = <400000>;
+        shared; // 一条总线多个设备（I2cDevice 共享代理）
+    };
+
+    spi0: spi@40013000 {
+        compatible = "embassy-dt,bus-spi";
+        periph = "SPI1";
+        sck = "PA5";
+        mosi = "PA7";
+        miso = "PA6";
+        dma-tx = "DMA1_CH3";
+        dma-rx = "DMA1_CH2";
+        frequency = <1000000>;
+    };
+
+    uart0: uart@40013800 {
+        compatible = "embassy-dt,bus-uart";
+        periph = "USART1";
+        rx = "PA10";
+        tx = "PA9";
+        dma-tx = "DMA1_CH4";
+        dma-rx = "DMA1_CH5";
+        baud = <115200>;
+    };
+
+    led0: led@0 {
+        compatible = "embassy-dt,gpio-out";
+        pin = "PC13";
+        level = "high";
+    };
+
+    btn0: btn@1 {
+        compatible = "embassy-dt,gpio-in";
+        pin = "PA2";
+        pull = "down";
+        exti;
+    };
+
+    adc_in: adc-in@0 {
+        compatible = "embassy-dt,gpio-pin";
+        pin = "PA3";
+    };
+
+    adc0: adc@40012400 {
+        compatible = "embassy-dt,periph-adc";
+        periph = "ADC1";
+    };
+
+    pwm0: pwm@40000000 {
+        compatible = "embassy-dt,periph-pwm";
+        periph = "TIM2";
+        ch1 = "PA0";
+        ch2 = "PA1";
+        frequency = <1000>;
+    };
+
+    usb0: usb@40005c00 {
+        compatible = "embassy-dt,periph-usb";
+        periph = "USB";
+        dp = "PA12";
+        dm = "PA11";
+    };
+
+    crc0: crc@40023000 {
+        compatible = "embassy-dt,periph-crc";
+        periph = "CRC";
+    };
+};

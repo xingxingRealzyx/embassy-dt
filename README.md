@@ -13,7 +13,7 @@
 embassy-dt/
 ├── src/            核心：TreeDesc / 节点 / 属性 / 拓扑排序 / 异步上线引擎
 ├── macros/         device_tree! 过程宏：DSL + DTS/DTSI 解析 + 编译期校验 + 后端代码生成
-├── stm32/          STM32 后端（embassy-dt-stm32）：H723ZG + F411CE + L476RG + G474RE
+├── stm32/          STM32 后端（embassy-dt-stm32）：H7/F4/L4/G4/F1 五大系列
 ├── examples/       宿主端 demo（DSL 与 DTS 两种入口）
 ```
 
@@ -193,15 +193,21 @@ FDCAN）与 F411（`adc_v2`/CRC 无 Config/bxCAN）会自动生成不同的代�
 - `stm32g474re`（Nucleo-G474RE；需要 `single-bank` 特性；DMA 中断同样叫
   `DMA1_CHANNELn`；USB 是 usb_v1 非 OTG：`Driver::new` + HSI48/CRS；
   ADC 是专用 adc_g4（`Adc::new(adc, AdcConfig)`），FDCAN 与 H723 同路径）
+- `stm32f103c8`（BluePill；中容量：无 CAN/RNG/DAC，DMA 通道固定映射、
+  AFIO 引脚重映射、USB 与 CAN1 共享中断向量、ADC 需要 ADC1_2 中断）
+- `stm32f103re`（Nucleo-F103RB；高容量：有 bxCAN（外设名 `CAN`）与 DAC）
 
 意图式时钟按芯片自动规划：H7（HSI/HSE + PLL1/PLL2）、F4（HSE/HSI +
 PLL）、L4（HSI/HSE + PLL，系统走 PLLR ≤ 80 MHz）、G4（HSI/HSE + PLL，
 系统走 PLLR ≤ 170 MHz，>150 MHz 自动开 boost；USB 用 HSI48，ADC 内核
-时钟走 SYS 由驱动自动分频；`adc12`/`fdcan`/`clk48` 可显式覆盖 mux）。
+时钟走 SYS 由驱动自动分频；`adc12`/`fdcan`/`clk48` 可显式覆盖 mux）、
+F1（HSI 8M÷2 或 HSE，PLLMUL 2–16 直接输出 SYSCLK ≤ 72 MHz；USB 只能
+在 PLL=72/48 MHz 时才有 48 MHz，因此请求 USB 时 SYSCLK 必须是 72 MHz
+（需 HSE）或 48 MHz；ADC 时钟 = PCLK2÷adc_pre ≤ 14 MHz）。
 
-## 四块板子，一份应用代码
+## 五块板子，一份应用代码
 
-`stm32/examples/common/app.rs` 是唯一一份应用逻辑（心跳 LED），四块板子
+`stm32/examples/common/app.rs` 是唯一一份应用逻辑（心跳 LED），五块板子
 各自只有 `.dts` 差异：
 
 ```sh
@@ -214,11 +220,21 @@ cargo check --offline --target thumbv7em-none-eabihf \
     --no-default-features --features stm32l476rg --example l476_nucleo       # L476RG（换芯片家族）
 cargo check --offline --target thumbv7em-none-eabihf \
     --no-default-features --features stm32g474re --example g474_nucleo       # G474RE（换芯片家族）
+cargo check --offline --target thumbv7em-none-eabihf \
+    --no-default-features --features stm32f103c8 --example f103_bluepill      # F103C8（换芯片家族）
+cargo check --offline --target thumbv7em-none-eabihf \
+    --no-default-features --features stm32f103re --example f103_embassy_can  # F103RE（bxCAN 示例）
 ```
 
-G4 的 FDCAN 演示还用到了「板级 overlay 覆盖」：G474RE 封装没有 PD0/PD1，
-`boards/nucleo-g474re-can.dts` 把 I2C1 移到 I2C2（PA9/PA8），把 PB8/PB9
-让给 FDCAN1 —— 应用代码与 `h723_embassy_can` 逐行相同。
+F1 的两个「板级 overlay」演示：
+
+- G474RE 封装没有 PD0/PD1，`boards/nucleo-g474re-can.dts` 把 I2C1 移到
+  I2C2（PA9/PA8），把 PB8/PB9 让给 FDCAN1；
+- F103 的 USB 与 CAN1 共享中断向量（`USB_LP_CAN1_RX0`），
+  `boards/nucleo-f103rb.dts` 用 `/delete-node/` 删掉 usb0 和 spi0
+  （LD2 占用 PA5），把 PB8/PB9 给 CAN1；
+- F1 的 AFIO 引脚可能同时实现多个 remap 候选（如 PA0 同时是 TIM2_CH1 的
+  `AfioRemap<0>` 和 `<2>`），生成代码显式选择默认 remap 0。
 
 ## 对照 embassy 官方示例（设备树风格重写）
 
@@ -250,6 +266,10 @@ G4 的 FDCAN 演示还用到了「板级 overlay 覆盖」：G474RE 封装没有
 | `g474_embassy_usb_serial` | `stm32g4/usb_serial.rs` | `board.usb0`（usb_v1 + HSI48/CRS） |
 | `g474_embassy_adc` | `stm32g4/adc.rs` | `board.adc0` + `board.adc_in` |
 | `g474_driver_bme280` | 驱动闭环 | `board.init_devices()`（与 H723/F411/L476 同一份应用） |
+| `f103_embassy_can` | `stm32f1/can.rs` | `board.can0`（bxCAN，F103RE + `/delete-node/` overlay） |
+| `f103_embassy_usb_serial` | `stm32f1/usb_serial.rs` | `board.usb0`（usb_v1，PLL 72M÷1.5 派生 48M） |
+| `f103_embassy_adc` | `stm32f1/adc.rs` | `board.adc0` + `board.adc_in`（async `read`，无 blocking） |
+| `f103_driver_bme280` | 驱动闭环 | `board.init_devices()`（F1 固定 DMA 映射 I2C1=CH6/7） |
 
 ```sh
 cd stm32

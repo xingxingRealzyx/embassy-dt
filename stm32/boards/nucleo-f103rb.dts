@@ -1,0 +1,32 @@
+/dts-v1/;
+#include "stm32f103.dtsi"
+
+// Nucleo-F103RB 板级 overlay：
+// - LD2（PA5）占用了 SPI1 SCK，删掉 spi0；
+// - B1 按钮在 PC13（dtsi 默认 PA2 是给 BluePill 扩展用的）；
+// - CAN1 与 USB 共享中断向量，删掉 usb0 后把 PB8/PB9 给 CAN1。
+
+/ {
+    model = "Nucleo-F103RB";
+    compatible = "st,nucleo-f103rb";
+
+    /delete-node/ &spi0;
+    /delete-node/ &usb0;
+
+    led0: led@0 {
+        pin = "PA5";
+        level = "low";
+    };
+
+    btn0: btn@1 {
+        pin = "PC13";
+    };
+
+    can0: can@40006400 {
+        compatible = "embassy-dt,periph-can";
+        // F1 的 bxCAN 外设名是 `CAN`（中断仍是 CAN1_TX/RX1/SCE 等）。
+        periph = "CAN";
+        rx = "PB8";
+        tx = "PB9";
+    };
+};

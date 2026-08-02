@@ -948,9 +948,9 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                     }
                     PeriphKindAst::Adc => {
                         match chip_name(tree)? {
-                            // H723 是 adc_v3、F411 是 adc_v2：构造都是 `Adc::new(adc)`，
-                            // L4 是 adc_v2 同款；G4 是专用 adc_g4，多一个 config 参数。
-                            // v1（F1/F3 等）需要 IRQ，暂不支持。
+                            // H723 是 adc_v3、F411/L4 是 adc_v2：构造都是 `Adc::new(adc)`；
+                            // G4 是专用 adc_g4，多一个 config 参数；
+                            // F1 是 adc_f1：`Adc::new(adc)` + ADC1_2 中断绑定。
                             Some(chip)
                                 if chip.contains("h723")
                                     || chip.contains("f411")
@@ -973,10 +973,22 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                     });
                                 }
                             }
+                            Some(chip) if chip.contains("f103") || chip.contains("f1") => {
+                                // F103 的 ADC1/ADC2 共用 ADC1_2 中断。
+                                push_binding(&mut bindings, Ident::new("ADC1_2", Span::call_site()), quote! {
+                                    ::embassy_stm32::adc::InterruptHandler<::embassy_stm32::peripherals::#periph>
+                                });
+                                fields.push(quote! {
+                                    pub #field: ::embassy_stm32::adc::Adc<'static, ::embassy_stm32::peripherals::#periph>
+                                });
+                                inits.push(quote! {
+                                    #field: ::embassy_stm32::adc::Adc::new(p.#periph),
+                                });
+                            }
                             _ => {
                                 return Err(syn::Error::new(
                                     node.id.span(),
-                                    "stm32 backend: `adc` is not supported for this chip (supported: stm32h723zg / stm32f411ce / stm32l476rg / stm32g474re)",
+                                    "stm32 backend: `adc` is not supported for this chip (supported: stm32h723zg / stm32f411ce / stm32l476rg / stm32g474re / stm32f103c8)",
                                 ))
                             }
                         }
@@ -1001,7 +1013,12 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                     ),
                                 });
                             }
-                            Some(chip) if chip.contains("f411") || chip.contains("l476") => {
+                            Some(chip)
+                                if chip.contains("f411")
+                                    || chip.contains("l476")
+                                    || chip.contains("f103")
+                                    || chip.contains("f1") =>
+                            {
                                 fields.push(quote! {
                                     pub #field: ::embassy_stm32::crc::Crc<'static>
                                 });
@@ -1032,10 +1049,17 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                         let ch3 = node.pin_ident_opt("ch3")?;
                         let ch4 = node.pin_ident_opt("ch4")?;
                         let freq = node.prop_u32_any(&["freq", "frequency"]).unwrap_or(1_000);
-                        let ch1 = pwm_pin(ch1);
-                        let ch2 = pwm_pin(ch2);
-                        let ch3 = pwm_pin(ch3);
-                        let ch4 = pwm_pin(ch4);
+                        // F1（AFIO）的引脚可能同时实现多个 remap 候选
+                        // （如 PA0 同时是 TIM2_CH1 的 AfioRemap<0> 和 <2>），
+                        // 生成代码显式选择默认 remap 0。
+                        let afio = chip_name(tree)?
+                            .as_deref()
+                            .map(|c| c.contains("f1"))
+                            .unwrap_or(false);
+                        let ch1 = pwm_pin(ch1, afio);
+                        let ch2 = pwm_pin(ch2, afio);
+                        let ch3 = pwm_pin(ch3, afio);
+                        let ch4 = pwm_pin(ch4, afio);
                         fields.push(quote! {
                             pub #field: ::embassy_stm32::timer::simple_pwm::SimplePwm<'static, ::embassy_stm32::peripherals::#periph>
                         });
@@ -1072,10 +1096,29 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                 });
                             }
                             Some(chip) if chip.contains("f4") || chip.contains("f1") => {
-                                let tx_irq = format_ident!("{}_TX", periph.to_string());
-                                let rx0 = format_ident!("{}_RX0", periph.to_string());
-                                let rx1 = format_ident!("{}_RX1", periph.to_string());
-                                let sce = format_ident!("{}_SCE", periph.to_string());
+                                // F1 的 CAN 中断与 USB 共享向量：TX=USB_HP_CAN1_TX、
+                                // RX0=USB_LP_CAN1_RX0（因此 USB 与 CAN 不能同树）。
+                                let f1 = chip.contains("f1");
+                                let tx_irq = if f1 {
+                                    Ident::new("USB_HP_CAN1_TX", Span::call_site())
+                                } else {
+                                    format_ident!("{}_TX", periph.to_string())
+                                };
+                                let rx0 = if f1 {
+                                    Ident::new("USB_LP_CAN1_RX0", Span::call_site())
+                                } else {
+                                    format_ident!("{}_RX0", periph.to_string())
+                                };
+                                let rx1 = if f1 {
+                                    Ident::new("CAN1_RX1", Span::call_site())
+                                } else {
+                                    format_ident!("{}_RX1", periph.to_string())
+                                };
+                                let sce = if f1 {
+                                    Ident::new("CAN1_SCE", Span::call_site())
+                                } else {
+                                    format_ident!("{}_SCE", periph.to_string())
+                                };
                                 push_binding(&mut bindings, tx_irq, quote! {
                                     ::embassy_stm32::can::TxInterruptHandler<::embassy_stm32::peripherals::#periph>
                                 });
@@ -1098,7 +1141,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                             _ => {
                                 return Err(syn::Error::new(
                                     node.id.span(),
-                                    "stm32 backend: `can` is not supported for this chip (declare `chip \"stm32h723zg\"` / `chip \"stm32g474re\"` or a F4/F1 chip with bxCAN)",
+                                    "stm32 backend: `can` is not supported for this chip (declare `chip \"stm32h723zg\"` / `chip \"stm32g474re\"` / `chip \"stm32f103c8\"` or a F4 chip with bxCAN)",
                                 ))
                             }
                         }
@@ -1111,9 +1154,12 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                             node.prop_u32_any(&["ep_out", "ep_out_buf"]).unwrap_or(256) as usize;
                         let ep_buf = format_ident!("{}_EP_BUF", field.to_string());
                         let periph_str = periph.to_string();
-                        // G4 的 USB 是 usb_v1（非 OTG）：外设 `USB`，中断 `USB_LP`。
+                        // G4/F1 的 USB 是 usb_v1（非 OTG）：外设 `USB`。
+                        // G4 中断 `USB_LP`；F103 是合并向量 `USB_LP_CAN1_RX0`。
                         // OTG 芯片的外设名是 `USB_OTG_FS/HS`，中断同名。
-                        let irq_name = if chip.as_deref().map(|c| c.contains("g4")).unwrap_or(false) {
+                        let irq_name = if chip.as_deref().map(|c| c.contains("f1")).unwrap_or(false) {
+                            "USB_LP_CAN1_RX0".to_string()
+                        } else if chip.as_deref().map(|c| c.contains("g4")).unwrap_or(false) {
                             format!("{}_LP", periph_str)
                         } else {
                             periph_str
@@ -1159,7 +1205,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                     },
                                 });
                             }
-                            Some(chip) if chip.contains("g4") => {
+                            Some(chip) if chip.contains("g4") || chip.contains("f1") => {
                                 // usb_v1：无需端点缓冲，非 unsafe，无 SOF 引脚。
                                 inits.push(quote! {
                                     #field: ::embassy_stm32::usb::Driver::new(
@@ -1170,7 +1216,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                             _ => {
                                 return Err(syn::Error::new(
                                     node.id.span(),
-                                    "stm32 backend: `usb` is not supported for this chip (declare `chip \"stm32h723zg\"` / `chip \"stm32f411ce\"` / `chip \"stm32g474re\"`)",
+                                    "stm32 backend: `usb` is not supported for this chip (declare `chip \"stm32h723zg\"` / `chip \"stm32f411ce\"` / `chip \"stm32g474re\"` / `chip \"stm32f103c8\"`)",
                                 ))
                             }
                         }
@@ -1288,13 +1334,17 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                         });
                     }
                     PeriphKindAst::ComplementaryPwm => {
-                        let ch1 = pwm_pin(node.pin_ident_opt("ch1")?);
+                        let afio = chip_name(tree)?
+                            .as_deref()
+                            .map(|c| c.contains("f1"))
+                            .unwrap_or(false);
+                        let ch1 = pwm_pin(node.pin_ident_opt("ch1")?, afio);
                         let ch1n = comp_pin(node.pin_ident_opt("ch1n")?);
-                        let ch2 = pwm_pin(node.pin_ident_opt("ch2")?);
+                        let ch2 = pwm_pin(node.pin_ident_opt("ch2")?, afio);
                         let ch2n = comp_pin(node.pin_ident_opt("ch2n")?);
-                        let ch3 = pwm_pin(node.pin_ident_opt("ch3")?);
+                        let ch3 = pwm_pin(node.pin_ident_opt("ch3")?, afio);
                         let ch3n = comp_pin(node.pin_ident_opt("ch3n")?);
-                        let ch4 = pwm_pin(node.pin_ident_opt("ch4")?);
+                        let ch4 = pwm_pin(node.pin_ident_opt("ch4")?, afio);
                         let ch4n = comp_pin(node.pin_ident_opt("ch4n")?);
                         let freq = node
                             .prop_u32_any(&["freq", "frequency"])
@@ -1571,6 +1621,9 @@ fn clock_config_tokens(tree: &DslTree) -> Result<TokenStream2> {
         Some(chip) if chip.contains("f411") => f4_clock_config(clock)?,
         Some(chip) if chip.contains("l476") => l4_clock_config(clock)?,
         Some(chip) if chip.contains("g4") => g4_clock_config(clock)?,
+        Some(chip) if chip.contains("f103") || chip.contains("f1") => {
+            f1_clock_config(clock)?
+        }
         _ => {
             return Err(syn::Error::new(
                 clock.id.span(),
@@ -1632,6 +1685,12 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
             })?;
             synth_g4_node(&plan)
         }
+        Some(chip) if chip.contains("f103") || chip.contains("f1") => {
+            let plan = plan_f1(sysclk, usb, hse, adc).map_err(|msg| {
+                syn::Error::new(clock.id.span(), format!("clock: {msg}"))
+            })?;
+            synth_f1_node(&plan)
+        }
         _ => {
             return Err(syn::Error::new(
                 clock.id.span(),
@@ -1644,6 +1703,9 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
         Some(chip) if chip.contains("f411") => f4_clock_config(&node)?,
         Some(chip) if chip.contains("l476") => l4_clock_config(&node)?,
         Some(chip) if chip.contains("g4") => g4_clock_config(&node)?,
+        Some(chip) if chip.contains("f103") || chip.contains("f1") => {
+            f1_clock_config(&node)?
+        }
         _ => unreachable!(),
     };
     Ok(quote! {
@@ -2256,6 +2318,142 @@ fn synth_g4_node(plan: &G4Plan) -> DslNode {
     }
 }
 
+#[derive(Debug)]
+struct F1Plan {
+    hse: Option<u32>,
+    prediv: u32,
+    mul: u32,
+    apb1: u32,
+    adc_pre: Option<u32>,
+    usb48: bool,
+}
+
+/// STM32F1（F103C8）：HSI 8 MHz 或 HSE（4–16 MHz）输入，
+/// PLL 结构最简单：`PLL = 源 / prediv × mul`（PLLMUL 2–16），
+/// SYSCLK ≤ 72 MHz（HSE）或 ≤ 64 MHz（HSI ÷2 ×16）；
+/// PCLK1 ≤ 36 MHz、PCLK2 ≤ 72 MHz；ADC 时钟 = PCLK2 / adc_pre ≤ 14 MHz。
+///
+/// USB 特殊性：F1 没有 HSI48，USB 48 MHz 由 PLL 直接派生——
+/// PLL = 72 MHz 时内部 ÷1.5，PLL = 48 MHz 时 ÷1。
+/// 因此请求 USB 时 SYSCLK 必须是 72 MHz（需要 HSE）或 48 MHz。
+fn plan_f1(
+    sysclk: u32,
+    usb: Option<u32>,
+    hse: Option<u32>,
+    adc: Option<u32>,
+) -> std::result::Result<F1Plan, String> {
+    if let Some(h) = hse {
+        if !(4_000_000..=16_000_000).contains(&h) {
+            return Err(format!("HSE frequency {h} Hz out of range (4–16 MHz)"));
+        }
+    }
+    let max_sys = if hse.is_some() { 72_000_000 } else { 64_000_000 };
+    if sysclk > max_sys {
+        return Err(format!(
+            "system clock {sysclk} Hz exceeds F1 maximum ({max_sys} Hz, \
+             HSI 上限 64 MHz，72 MHz 需要 HSE)"
+        ));
+    }
+    if let Some(u) = usb {
+        if u != 48_000_000 {
+            return Err("only 48 MHz USB clock is supported".into());
+        }
+        // F1 的 USB 时钟只能来自 PLL（72M÷1.5 或 48M÷1）。
+        if sysclk != 72_000_000 && sysclk != 48_000_000 {
+            return Err(
+                "F1 USB requires SYSCLK = 72 MHz (with HSE) or 48 MHz (HSI)".into(),
+            );
+        }
+    }
+    let input = hse.unwrap_or(8_000_000) as u64;
+
+    let mut best: Option<(u32, u32)> = None;
+    for prediv in 1u32..=2 {
+        if hse.is_none() && prediv != 2 {
+            // F1 的 HSI 作 PLL 源时硬件强制 ÷2（embassy init 会 panic）。
+            continue;
+        }
+        let in_freq = input / prediv as u64;
+        if !(1_000_000..=25_000_000).contains(&in_freq) {
+            continue;
+        }
+        if sysclk as u64 % in_freq != 0 {
+            continue;
+        }
+        let mul = sysclk as u64 / in_freq;
+        if (2..=16).contains(&mul) {
+            best = Some((prediv, mul as u32));
+        }
+    }
+    let (prediv, mul) = best
+        .ok_or_else(|| format!("cannot find a valid PLL config for {sysclk} Hz"))?;
+
+    // PCLK1 ≤ 36 MHz：72/64 → ÷2，48/36 → ÷2/÷1。
+    let apb1 = if sysclk > 36_000_000 { 2 } else { 1 };
+
+    // ADC 时钟 = PCLK2（=SYSCLK）÷ adc_pre ≤ 14 MHz，取最小分频。
+    let adc_pre = adc
+        .map(|_| {
+            [2u32, 4, 6, 8]
+                .into_iter()
+                .find(|pre| sysclk / pre <= 14_000_000)
+                .ok_or_else(|| format!("cannot find ADC prescaler for {sysclk} Hz"))
+        })
+        .transpose()?;
+
+    Ok(F1Plan {
+        hse,
+        prediv,
+        mul,
+        apb1,
+        adc_pre,
+        usb48: usb.is_some(),
+    })
+}
+
+fn synth_f1_node(plan: &F1Plan) -> DslNode {
+    let mut props = vec![
+        prop(
+            "source",
+            PropValue::Str(LitStr::new(
+                if plan.hse.is_some() { "hse" } else { "hsi" },
+                Span::call_site(),
+            )),
+        ),
+        prop(
+            "pll",
+            PropValue::Array(vec![plan.prediv, plan.mul]),
+        ),
+        prop(
+            "sys",
+            PropValue::Str(LitStr::new("pll1_p", Span::call_site())),
+        ),
+        prop("ahb", PropValue::U32(LitInt::new("1", Span::call_site()))),
+        prop(
+            "apb1",
+            PropValue::U32(LitInt::new(&plan.apb1.to_string(), Span::call_site())),
+        ),
+        prop("apb2", PropValue::U32(LitInt::new("1", Span::call_site()))),
+    ];
+    if let Some(h) = plan.hse {
+        props.push(prop("hse", PropValue::U32(LitInt::new(&h.to_string(), Span::call_site()))));
+    }
+    if let Some(pre) = plan.adc_pre {
+        props.push(prop(
+            "adc_pre",
+            PropValue::U32(LitInt::new(&pre.to_string(), Span::call_site())),
+        ));
+    }
+    let _ = plan.usb48; // F1 的 USB 时钟由 PLL 自动派生，无需额外属性。
+    DslNode {
+        id: Ident::new("clock", Span::call_site()),
+        kind: NodeKindAst::Device,
+        driver: None,
+        props,
+        deps: Vec::new(),
+    }
+}
+
 fn prop(key: &str, value: PropValue) -> DslProp {
     DslProp {
         key: Ident::new(key, Span::call_site()),
@@ -2842,14 +3040,104 @@ fn g4_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
     Ok(stmts)
 }
 
+fn f1_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
+    let mut stmts = Vec::new();
+
+    if let Some(source) = node.prop_str_opt("source")? {
+        if source == "hsi" {
+            // F1 的 HSI 是布尔开关（PLL 源在 `pll.src` 里指定）。
+            stmts.push(quote! { config.rcc.hsi = true; });
+        }
+    }
+    if let Some(hse) = node.prop_u32_any(&["hse"]) {
+        let mode = match node.prop_str_opt("hse_mode")?.as_deref() {
+            None | Some("oscillator") => quote!(Oscillator),
+            Some("bypass") => quote!(Bypass),
+            Some(other) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `hse-mode` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.hse = Some(::embassy_stm32::rcc::Hse {
+                freq: ::embassy_stm32::time::Hertz(#hse),
+                mode: ::embassy_stm32::rcc::HseMode::#mode,
+            });
+        });
+    }
+    if let Some(pll) = node.prop_array("pll") {
+        // F1：<prediv mul>（PLL 输出直接就是 SYSCLK 源）。
+        if pll.len() < 2 {
+            return Err(syn::Error::new(
+                node.id.span(),
+                "clock: `pll` needs <prediv mul> on F1",
+            ));
+        }
+        let pre = format_ident!("DIV{}", pll[0]);
+        let mul = format_ident!("MUL{}", pll[1]);
+        let src = match node.prop_str_opt("source")?.as_deref() {
+            None | Some("hsi") => quote!(HSI),
+            Some("hse") => quote!(HSE),
+            Some(other) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `source` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! {
+            config.rcc.pll = Some(::embassy_stm32::rcc::Pll {
+                src: ::embassy_stm32::rcc::PllSource::#src,
+                prediv: ::embassy_stm32::rcc::PllPreDiv::#pre,
+                mul: ::embassy_stm32::rcc::PllMul::#mul,
+            });
+        });
+    }
+    if let Some(sys) = node.prop_str_opt("sys")? {
+        let v = match sys.as_str() {
+            "hsi" => quote!(HSI),
+            "hse" => quote!(HSE),
+            "pll1_p" => quote!(PLL1_P),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `sys` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.sys = ::embassy_stm32::rcc::Sysclk::#v; });
+    }
+    if let Some(n) = node.prop_u32_any(&["ahb"]) {
+        let v = format_ident!("DIV{}", n);
+        stmts.push(quote! { config.rcc.ahb_pre = ::embassy_stm32::rcc::AHBPrescaler::#v; });
+    }
+    for key in ["apb1", "apb2"] {
+        if let Some(n) = node.prop_u32_any(&[key]) {
+            let field = format_ident!("{}_pre", key);
+            let v = format_ident!("DIV{}", n);
+            stmts.push(quote! { config.rcc.#field = ::embassy_stm32::rcc::APBPrescaler::#v; });
+        }
+    }
+    if let Some(n) = node.prop_u32_any(&["adc_pre"]) {
+        let v = format_ident!("DIV{}", n);
+        stmts.push(quote! { config.rcc.adc_pre = ::embassy_stm32::rcc::ADCPrescaler::#v; });
+    }
+    Ok(stmts)
+}
+
 /// 把 `"DMA1_CH0"` 这类通道名转成对应的中断名。
 /// - H7/F4：`DMA1_CH0` → `DMA1_STREAM0`
 /// - L4：中断就叫 `DMA1_CH0`（embassy 统一命名）
 fn stream_irq(channel: &str, node: &DslNode, chip: Option<&str>) -> Result<Ident> {
     let irq = if channel.contains("_STREAM") || channel.contains("_CHANNEL") {
         channel.to_string()
-    } else if chip.map(|c| c.contains("l4") || c.contains("g4")).unwrap_or(false) {
-        // L4/G4：通道类型 `DMA1_CH1`，中断名 `DMA1_CHANNEL1`。
+    } else if chip
+        .map(|c| c.contains("l4") || c.contains("g4") || c.contains("f1"))
+        .unwrap_or(false)
+    {
+        // L4/G4/F1：通道类型 `DMA1_CH1`，中断名 `DMA1_CHANNEL1`。
         channel.replace("_CH", "_CHANNEL")
     } else if channel.contains("_CH") {
         channel.replace("_CH", "_STREAM")
@@ -2889,8 +3177,14 @@ fn push_binding(bindings: &mut Vec<(String, TokenStream2)>, irq: Ident, handler:
     }
 }
 
-fn pwm_pin(pin: Option<Ident>) -> TokenStream2 {
+fn pwm_pin(pin: Option<Ident>, afio: bool) -> TokenStream2 {
     match pin {
+        Some(pin) if afio => quote! {
+            Some(::embassy_stm32::timer::simple_pwm::PwmPin::<_, _, ::embassy_stm32::gpio::AfioRemap<0>>::new(
+                p.#pin,
+                ::embassy_stm32::gpio::OutputType::PushPull,
+            ))
+        },
         Some(pin) => quote! {
             Some(::embassy_stm32::timer::simple_pwm::PwmPin::new(
                 p.#pin,
@@ -3226,6 +3520,66 @@ mod tests {
         assert!(tokens.contains("mux.adc12sel"));
         assert!(tokens.contains("Adcsel::SYS"));
         assert!(tokens.contains("Fdcansel::PCLK1"));
+    }
+
+    #[test]
+    fn intent_f1_72mhz_hse_with_usb() {
+        // 8 MHz 晶振：PLL = 8M ÷1 ×9 = 72 MHz（经典 BluePill 配置），
+        // USB 由 PLL÷1.5 派生 48 MHz；APB1 ÷2；ADC ÷6 = 12 MHz。
+        let p = plan_f1(72_000_000, Some(48_000_000), Some(8_000_000), Some(60_000_000)).unwrap();
+        assert_eq!((p.prediv, p.mul), (1, 9));
+        assert_eq!(p.apb1, 2);
+        assert_eq!(p.adc_pre, Some(6));
+        assert!(p.usb48);
+        assert_eq!(p.hse, Some(8_000_000));
+    }
+
+    #[test]
+    fn intent_f1_64mhz_hsi() {
+        // HSI 8 MHz：必须 ÷2，×16 = 64 MHz（HSI 上限）。
+        let p = plan_f1(64_000_000, None, None, None).unwrap();
+        assert_eq!((p.prediv, p.mul), (2, 16));
+        assert_eq!(p.apb1, 2);
+        assert!(p.adc_pre.is_none());
+    }
+
+    #[test]
+    fn intent_f1_48mhz_hsi_with_usb() {
+        // HSI ÷2 ×12 = 48 MHz：USB 由 PLL÷1 派生 48 MHz。
+        let p = plan_f1(48_000_000, Some(48_000_000), None, None).unwrap();
+        assert_eq!((p.prediv, p.mul), (2, 12));
+        assert_eq!(p.apb1, 2);
+        assert!(p.usb48);
+    }
+
+    #[test]
+    fn intent_f1_rejects_usb_without_pll_48_72() {
+        let err = plan_f1(64_000_000, Some(48_000_000), None, None).unwrap_err();
+        assert!(err.contains("72 MHz"));
+        let err = plan_f1(80_000_000, None, Some(8_000_000), None).unwrap_err();
+        assert!(err.contains("72 MHz"));
+    }
+
+    #[test]
+    fn stm32_backend_generates_f1_clock_config() {
+        let clock = clock_node(&[
+            ("source", PropValue::Str(LitStr::new("hse", Span::call_site()))),
+            ("hse", PropValue::U32(LitInt::new("8000000", Span::call_site()))),
+            ("pll", PropValue::Array(vec![1, 9])),
+            ("sys", PropValue::Str(LitStr::new("pll1_p", Span::call_site()))),
+            ("ahb", PropValue::U32(LitInt::new("1", Span::call_site()))),
+            ("apb1", PropValue::U32(LitInt::new("2", Span::call_site()))),
+            ("apb2", PropValue::U32(LitInt::new("1", Span::call_site()))),
+            ("adc_pre", PropValue::U32(LitInt::new("6", Span::call_site()))),
+        ]);
+        let stmts = f1_clock_config(&clock).unwrap();
+        let tokens = quote!(#(#stmts)*).to_string().replace(' ', "");
+        assert!(tokens.contains("PllSource::HSE"));
+        assert!(tokens.contains("PllPreDiv::DIV1"));
+        assert!(tokens.contains("PllMul::MUL9"));
+        assert!(tokens.contains("Sysclk::PLL1_P"));
+        assert!(tokens.contains("APBPrescaler::DIV2"));
+        assert!(tokens.contains("ADCPrescaler::DIV6"));
     }
 #[cfg(test)]
 fn clock_node(props: &[(&str, PropValue)]) -> DslNode {
