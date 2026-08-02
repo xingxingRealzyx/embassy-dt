@@ -38,5 +38,5 @@ pub mod init;
 pub mod tree;
 
 pub use embassy_dt_macros::device_tree;
-pub use init::{init_devices, AsyncDevice, InitError};
+pub use init::{init_devices, AsyncDevice, DeviceError, InitError};
 pub use tree::{BusKind, NodeDesc, NodeId, NodeKind, Prop, TreeDesc, ValidationError};

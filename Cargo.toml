@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["macros", "stm32"]
+members = ["macros", "stm32", "drivers/bme280"]
 
 [package]
 name = "embassy-dt"

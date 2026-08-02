@@ -570,6 +570,8 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
     let mut statics = Vec::new();
     // 中断绑定条目，按中断名去重。
     let mut bindings: Vec<(String, TokenStream2)> = Vec::new();
+    // 需要实例化的设备（driver 类型来自 DSL）。
+    let mut devices: Vec<(&DslNode, &Path)> = Vec::new();
 
     for node in &tree.nodes {
         match &node.kind {
@@ -1133,7 +1135,49 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                     }
                 }
             }
-            NodeKindAst::Device => continue,
+            NodeKindAst::Device => {
+                let Some(driver) = &node.driver else {
+                    continue; // 无 driver 的 device 节点保持文档性
+                };
+                for dep in &node.deps {
+                    let dep_node = tree.nodes.iter().find(|n| &n.id == dep).ok_or_else(|| {
+                        syn::Error::new(
+                            dep.span(),
+                            format!("device `{}` depends on unknown node `{}`", node.id, dep),
+                        )
+                    })?;
+                    match dep_node.kind {
+                        NodeKindAst::Device => {
+                            return Err(syn::Error::new(
+                                node.id.span(),
+                                "device-to-device dependencies are not supported yet \
+                                 (v1 设备独占总线；设备依赖设备留待共享总线)",
+                            ))
+                        }
+                        NodeKindAst::Bus(_) | NodeKindAst::Gpio(_) | NodeKindAst::Peripheral(_) => {}
+                    }
+                }
+                devices.push((node, driver));
+            }
+        }
+    }
+
+    // 共享总线检查：同一条总线只能被一个设备依赖（v1 限制）。
+    for (i, (node, _)) in devices.iter().enumerate() {
+        for dep in &node.deps {
+            if let Some((prev, _)) = devices[..i]
+                .iter()
+                .find(|(prev, _)| prev.deps.iter().any(|d| d == dep))
+            {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!(
+                        "bus `{dep}` is shared by devices `{}` and `{}`; \
+                         shared buses are not supported yet",
+                        prev.id, node.id
+                    ),
+                ));
+            }
         }
     }
 
@@ -1150,6 +1194,53 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
             #irq => #handler;
         }
     });
+
+    let device_tokens = if devices.is_empty() {
+        TokenStream2::new()
+    } else {
+        let fields = devices.iter().map(|(node, driver)| {
+            let id = &node.id;
+            quote! { pub #id: #driver }
+        });
+        let inits = devices.iter().map(|(node, driver)| {
+            let id = &node.id;
+            let dev_ty = format_ident!("{}_Ty", id.to_string());
+            let id_str = LitStr::new(&id.to_string(), id.span());
+            let args = node.deps.iter().map(|dep| {
+                let field = format_ident!("{}", dep.to_string());
+                quote! { self.#field }
+            });
+            quote! {
+                // 类型别名规避宏输出中 `Type<...>>::method` 的解析限制。
+                type #dev_ty = #driver;
+                let #id = #dev_ty::init(#(#args),*, &TREE.node(#id_str).unwrap()).await?;
+            }
+        });
+        let members = devices.iter().map(|(node, _)| {
+            let id = &node.id;
+            quote! { #id }
+        });
+        quote! {
+            /// 由 `device_tree!` 生成的设备集合（依赖的总线所有权已移入驱动）。
+            #[allow(non_upper_case_globals)]
+            pub struct BoardDevices {
+                #(#fields),*
+            }
+
+            impl Board {
+                /// 按依赖序构造设备。
+                ///
+                /// 驱动约定：`DriverType::init(deps..., &NodeDesc) -> Result<Self, DeviceError>`
+                /// （deps 按设备树中依赖的顺序按值传入）。
+                pub async fn init_devices(
+                    self,
+                ) -> Result<BoardDevices, ::embassy_dt::DeviceError> {
+                    #(#inits)*
+                    Ok(BoardDevices { #(#members),* })
+                }
+            }
+        }
+    };
 
     Ok(quote! {
         /// 由 `device_tree!` 为 STM32 后端生成的类型化板级结构。
@@ -1171,8 +1262,11 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
         });
 
         #(#statics)*
+
+        #device_tokens
     })
 }
+
 
 fn periph_ident(node: &DslNode) -> Result<Ident> {
     let name = node.prop_str("periph")?;
@@ -1533,4 +1627,5 @@ mod tests {
         let err = expand(tree).unwrap_err();
         assert!(err.to_string().contains("`level` must be `high` or `low`"));
     }
+
 }

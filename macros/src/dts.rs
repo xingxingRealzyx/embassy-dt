@@ -225,6 +225,16 @@ fn to_dsl_node(
         deleted_props: _,
     } = node;
 
+    // DTS 设备节点可用 `driver = "crate::Bme280Driver"` 指定驱动类型；
+    // 未指定时保持文档性节点（不进 BoardDevices）。
+    let driver = props
+        .iter()
+        .find(|(k, _)| k == "driver")
+        .and_then(|(_, v)| match v {
+            DtsPropVal::Str(s) => syn::parse_str::<syn::Path>(s).ok(),
+            _ => None,
+        });
+
     let id_ident: Ident = syn::parse_str::<Ident>(&id).map_err(|_| {
         dts_err(&format!(
             "node `{path}` (label `{label:?}`) is not a valid Rust identifier"
@@ -298,7 +308,7 @@ fn to_dsl_node(
     Ok(DslNode {
         id: id_ident,
         kind: kind.unwrap_or(NodeKindAst::Device),
-        driver: None,
+        driver,
         props,
         deps,
     })

@@ -102,6 +102,32 @@ cargo run --offline --example async_init
 #   ✓ bme280
 ```
 
+## 设备驱动闭环（v1）
+
+`device` 节点通过 `driver` 属性指定驱动类型后，宏生成 `Board::init_devices()`：
+按依赖序把总线**所有权注入**驱动（v1 限制：一条总线只能被一个设备使用，
+共享总线留待后续）。
+
+```rust
+// 板级 DTS：
+// bme280: bme@76 {
+//     compatible = "bosch,bme280";
+//     bus = <&i2c0>;
+//     addr = <0x76>;
+//     driver = "embassy_dt_bme280::Bme280<...I2c<'static, Async, Master>>";
+// };
+
+let board = Board::init(p);
+let mut devices = board.init_devices().await?;   // 总线按依赖序注入设备
+let t = devices.bme280.temperature().await?;
+```
+
+驱动约定：类型提供
+`async fn init(deps..., &NodeDesc) -> Result<Self, DeviceError>`，deps 按
+设备树依赖顺序按值传入。参考实现：[`drivers/bme280`](drivers/bme280)
+（真实 BME280 驱动：reset/ID 校验/校准参数/温湿度补偿，带 datasheet
+示例值的单元测试）。
+
 ## STM32 后端（embassy-dt-stm32）
 
 支持节点：

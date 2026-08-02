@@ -104,6 +104,37 @@ pub async fn init_devices<D: AsyncDevice>(
     Ok(n)
 }
 
+/// 设备初始化错误。
+///
+/// 设备驱动约定：`init` 失败时返回 [`DeviceError`]，用 [`DeviceError::msg`]
+/// 携带人类可读的消息（no_std 友好，零分配）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceError {
+    /// 驱动初始化失败（如 ID 校验不通过、通信超时）。
+    Probe(&'static str),
+    /// 设备树节点缺少驱动需要的属性。
+    InvalidProp(&'static str),
+    /// 设备树节点不存在。
+    MissingNode(&'static str),
+}
+
+impl DeviceError {
+    /// 构造一个驱动初始化错误。
+    pub const fn msg(message: &'static str) -> Self {
+        Self::Probe(message)
+    }
+}
+
+impl core::fmt::Display for DeviceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Probe(msg) => write!(f, "device probe failed: {msg}"),
+            Self::InvalidProp(prop) => write!(f, "invalid or missing property `{prop}`"),
+            Self::MissingNode(id) => write!(f, "device tree node `{id}` not found"),
+        }
+    }
+}
+
 fn is_present<D: AsyncDevice>(devices: &[D], id: &str) -> bool {
     devices.iter().any(|device| device.id() == id)
 }

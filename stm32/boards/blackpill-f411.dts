@@ -86,4 +86,11 @@
         ch1n = "PA7";
         frequency = <10000>;
     };
+
+    bme280: bme@76 {
+        compatible = "bosch,bme280";
+        bus = <&i2c0>;
+        addr = <0x76>;
+        driver = "embassy_dt_bme280::Bme280<embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>";
+    };
 };

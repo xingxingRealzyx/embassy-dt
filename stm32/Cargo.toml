@@ -29,6 +29,7 @@ embassy-futures = "0.1"
 embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
 embassy-time = "0.5"
 embassy-usb = { version = "0.6", features = ["defmt"] }
+embassy-dt-bme280 = { path = "../drivers/bme280" }
 panic-probe = "1"
 usbd-hid = "0.10"
 
@@ -133,4 +134,12 @@ required-features = ["stm32h723zg"]
 
 [[example]]
 name = "f411_embassy_usb_hid_mouse"
+required-features = ["stm32f411ce"]
+
+[[example]]
+name = "h723_driver_bme280"
+required-features = ["stm32h723zg"]
+
+[[example]]
+name = "f411_driver_bme280"
 required-features = ["stm32f411ce"]
