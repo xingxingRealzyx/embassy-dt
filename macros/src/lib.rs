@@ -633,6 +633,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                 let (dma_rx_str, dma_rx) = node.dma_channel("dma_rx")?;
                 let freq = node.prop_u32_any(&["freq", "frequency"]).unwrap_or(100_000);
                 let field = &node.id;
+                let shared = node.prop_bool("shared");
 
                 push_dma_bindings(&mut bindings, &dma_tx_str, &dma_tx, node)?;
                 push_dma_bindings(&mut bindings, &dma_rx_str, &dma_rx, node)?;
@@ -645,25 +646,73 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                     ::embassy_stm32::i2c::ErrorInterruptHandler<::embassy_stm32::peripherals::#periph>
                 });
 
-                fields.push(quote! {
-                    pub #field: ::embassy_stm32::i2c::I2c<
-                        'static,
-                        ::embassy_stm32::mode::Async,
-                        ::embassy_stm32::i2c::mode::Master,
-                    >
-                });
-                inits.push(quote! {
-                    #field: {
-                        let mut config = ::embassy_stm32::i2c::Config::default();
-                        config.frequency = ::embassy_stm32::time::Hertz(#freq);
-                        ::embassy_stm32::i2c::I2c::new(
-                            p.#periph, p.#scl, p.#sda,
-                            p.#dma_tx, p.#dma_rx,
-                            DtIrqs,
-                            config,
-                        )
-                    },
-                });
+                if shared {
+                    let mux_name = format_ident!("{}_MUTEX", field.to_string());
+                    statics.push(quote! {
+                        #[allow(non_upper_case_globals)]
+                        static mut #mux_name: Option<
+                            ::embassy_sync::mutex::Mutex<
+                                ::embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+                                ::embassy_stm32::i2c::I2c<
+                                    'static,
+                                    ::embassy_stm32::mode::Async,
+                                    ::embassy_stm32::i2c::mode::Master,
+                                >,
+                            >,
+                        > = None;
+                    });
+                    fields.push(quote! {
+                        pub #field: ::embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<
+                            'static,
+                            ::embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+                            ::embassy_stm32::i2c::I2c<
+                                'static,
+                                ::embassy_stm32::mode::Async,
+                                ::embassy_stm32::i2c::mode::Master,
+                            >,
+                        >
+                    });
+                    inits.push(quote! {
+                        #field: {
+                            let raw = {
+                                let mut config = ::embassy_stm32::i2c::Config::default();
+                                config.frequency = ::embassy_stm32::time::Hertz(#freq);
+                                ::embassy_stm32::i2c::I2c::new(
+                                    p.#periph, p.#scl, p.#sda,
+                                    p.#dma_tx, p.#dma_rx,
+                                    DtIrqs,
+                                    config,
+                                )
+                            };
+                            unsafe {
+                                #mux_name = Some(::embassy_sync::mutex::Mutex::new(raw));
+                            }
+                            ::embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice::new(
+                                unsafe { #mux_name.as_ref() }.expect("i2c mutex"),
+                            )
+                        },
+                    });
+                } else {
+                    fields.push(quote! {
+                        pub #field: ::embassy_stm32::i2c::I2c<
+                            'static,
+                            ::embassy_stm32::mode::Async,
+                            ::embassy_stm32::i2c::mode::Master,
+                        >
+                    });
+                    inits.push(quote! {
+                        #field: {
+                            let mut config = ::embassy_stm32::i2c::Config::default();
+                            config.frequency = ::embassy_stm32::time::Hertz(#freq);
+                            ::embassy_stm32::i2c::I2c::new(
+                                p.#periph, p.#scl, p.#sda,
+                                p.#dma_tx, p.#dma_rx,
+                                DtIrqs,
+                                config,
+                            )
+                        },
+                    });
+                }
             }
             NodeKindAst::Bus(BusKindAst::Spi) => {
                 let periph = periph_ident(node)?;
@@ -1212,9 +1261,13 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
         }
     }
 
-    // 共享总线检查：同一条总线只能被一个设备依赖（v1 限制）。
+    // 共享总线检查：非共享总线只能被一个设备依赖；`shared` 总线允许多设备。
     for (i, (node, _)) in devices.iter().enumerate() {
         for dep in &node.deps {
+            let dep_node = tree.nodes.iter().find(|n| &n.id == dep).unwrap();
+            if dep_node.prop_bool("shared") {
+                continue;
+            }
             if let Some((prev, _)) = devices[..i]
                 .iter()
                 .find(|(prev, _)| prev.deps.iter().any(|d| d == dep))
@@ -1258,7 +1311,18 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
             let id_str = LitStr::new(&id.to_string(), id.span());
             let args = node.deps.iter().map(|dep| {
                 let field = format_ident!("{}", dep.to_string());
-                quote! { self.#field }
+                let shared = tree
+                    .nodes
+                    .iter()
+                    .find(|n| &n.id == dep)
+                    .map(|n| n.prop_bool("shared"))
+                    .unwrap_or(false);
+                if shared {
+                    // 共享总线：驱动拿到 Clone 的共享代理。
+                    quote! { self.#field.clone() }
+                } else {
+                    quote! { self.#field }
+                }
             });
             quote! {
                 // 类型别名规避宏输出中 `Type<...>>::method` 的解析限制。
@@ -1399,9 +1463,12 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
     }
     let usb = clock.prop_u32_any(&["usb"]);
     let hse = clock.prop_u32_any(&["hse"]);
+    let i2s = clock.prop_u32_any(&["i2s"]);
+    let adc = clock.prop_u32_any(&["adc"]);
+    let sdmmc = clock.prop_u32_any(&["sdmmc"]);
     let node = match chip_name(tree)? {
         Some(chip) if chip.contains("h723") => {
-            let plan = plan_h7(sysclk, usb, hse).map_err(|msg| {
+            let plan = plan_h7(sysclk, usb, hse, i2s, adc, sdmmc).map_err(|msg| {
                 syn::Error::new(clock.id.span(), format!("clock: {msg}"))
             })?;
             synth_h7_node(&plan)
@@ -1448,6 +1515,10 @@ struct H7Plan {
     scale1: bool,
     usb48: bool,
     source_hse: bool,
+    pll2: Option<(u32, u32, u32, u32)>,
+    spi123: Option<&'static str>,
+    adc_sel: Option<&'static str>,
+    sdmmc_sel: Option<&'static str>,
 }
 
 /// STM32H7：HSI 64 MHz 输入，PLL1 VCO 192–836 MHz，PLLN 4–512，PLLM 1–64，
@@ -1456,6 +1527,9 @@ fn plan_h7(
     sysclk: u32,
     usb: Option<u32>,
     hse: Option<u32>,
+    i2s: Option<u32>,
+    adc: Option<u32>,
+    sdmmc: Option<u32>,
 ) -> std::result::Result<H7Plan, String> {
     // HSE 存在时用外部晶振作为 PLL 源，否则用内部 HSI 64 MHz。
     let input = hse.unwrap_or(64_000_000) as u64;
@@ -1476,6 +1550,21 @@ fn plan_h7(
             return Err("only 48 MHz USB clock is supported".into());
         }
     }
+
+    // 外设时钟：SPI1/2/3 与 I2S 共用 PLL2_P，ADC 也用 PLL2_P，
+    // SDMMC 用 PLL2_R。P 输出只有一个频率。
+    if let (Some(i), Some(a)) = (i2s, adc) {
+        if i != a {
+            return Err(
+                "`i2s` and `adc` share PLL2_P output; use the same frequency".into(),
+            );
+        }
+    }
+    let freq_p = i2s.or(adc);
+    let pll2 = plan_h7_pll2(freq_p, sdmmc, input)?;
+    let spi123 = i2s.map(|_| "pll2_p");
+    let adc_sel = adc.map(|_| "pll2_p");
+    let sdmmc_sel = sdmmc.map(|_| "pll2_r");
 
     // 找 VCO 最小的合法 (prediv, mul, divp)。
     let mut best: Option<(u64, u32, u32, u32)> = None;
@@ -1513,7 +1602,58 @@ fn plan_h7(
         scale1: sysclk <= 400_000_000,
         usb48: usb.is_some(),
         source_hse,
+        pll2,
+        spi123,
+        adc_sel,
+        sdmmc_sel,
     })
+}
+
+/// PLL2 计算：P 输出（I2S/ADC）与 R 输出（SDMMC）共用一个 VCO。
+fn plan_h7_pll2(
+    freq_p: Option<u32>,
+    freq_r: Option<u32>,
+    input: u64,
+) -> std::result::Result<Option<(u32, u32, u32, u32)>, String> {
+    if freq_p.is_none() && freq_r.is_none() {
+        return Ok(None);
+    }
+    let mut best: Option<(u64, u32, u32, u32, u32)> = None;
+    for divp in 1u32..=128 {
+        for divr in 1u32..=128 {
+            let vco_p = freq_p.map(|f| f as u64 * divp as u64);
+            let vco_r = freq_r.map(|f| f as u64 * divr as u64);
+            let vco = match (vco_p, vco_r) {
+                (Some(a), Some(b)) if a == b => a,
+                (Some(a), None) => a,
+                (None, Some(b)) => b,
+                _ => continue,
+            };
+            if !(192_000_000..=836_000_000).contains(&vco) {
+                continue;
+            }
+            for prediv in 1u32..=64 {
+                let num = vco * prediv as u64;
+                if num % input != 0 {
+                    continue;
+                }
+                let mul = num / input;
+                if (4..=512).contains(&mul) {
+                    let cand = (vco, prediv, mul as u32, divp, divr);
+                    if best.as_ref().map_or(true, |b| cand.0 < b.0) {
+                        best = Some(cand);
+                    }
+                }
+            }
+        }
+    }
+    let (_, prediv, mul, divp, divr) = best.ok_or_else(|| {
+        format!(
+            "cannot find a valid PLL2 config for peripheral clocks (P={:?}, R={:?})",
+            freq_p, freq_r
+        )
+    })?;
+    Ok(Some((prediv, mul, divp, divr)))
 }
 
 #[derive(Debug)]
@@ -1655,6 +1795,30 @@ fn synth_h7_node(plan: &H7Plan) -> DslNode {
             )),
         ),
     ];
+    if let Some((prediv, mul, divp, divr)) = plan.pll2 {
+        props.push(prop(
+            "pll2",
+            PropValue::Array(vec![prediv, mul, divp, divr]),
+        ));
+    }
+    if let Some(sel) = plan.spi123 {
+        props.push(prop(
+            "spi123sel",
+            PropValue::Str(LitStr::new(sel, Span::call_site())),
+        ));
+    }
+    if let Some(sel) = plan.adc_sel {
+        props.push(prop(
+            "adcsel",
+            PropValue::Str(LitStr::new(sel, Span::call_site())),
+        ));
+    }
+    if let Some(sel) = plan.sdmmc_sel {
+        props.push(prop(
+            "sdmmcsel",
+            PropValue::Str(LitStr::new(sel, Span::call_site())),
+        ));
+    }
     if plan.usb48 {
         props.push(prop("hsi48", PropValue::Bool(true)));
         props.push(prop(
@@ -1836,6 +2000,84 @@ fn h7_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
             }
         };
         stmts.push(quote! { config.rcc.mux.usbsel = ::embassy_stm32::rcc::mux::Usbsel::#v; });
+    }
+    if let Some(pll2) = node.prop_array("pll2") {
+        if pll2.len() < 4 {
+            return Err(syn::Error::new(
+                node.id.span(),
+                "clock: `pll2` needs <prediv mul divp divr>",
+            ));
+        }
+        let source = node.prop_str_opt("source")?.ok_or_else(|| {
+            syn::Error::new(node.id.span(), "clock: `source` is required with `pll2`")
+        })?;
+        let src = match source.as_str() {
+            "hsi" => quote!(HSI),
+            "csi" => quote!(CSI),
+            "hse" => quote!(HSE),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `source` `{other}` (hsi/csi/hse)"),
+                ))
+            }
+        };
+        let pre = format_ident!("DIV{}", pll2[0]);
+        let mul = format_ident!("MUL{}", pll2[1]);
+        let divp = format_ident!("DIV{}", pll2[2]);
+        let divr = format_ident!("DIV{}", pll2[3]);
+        stmts.push(quote! {
+            config.rcc.pll2 = Some(::embassy_stm32::rcc::Pll {
+                source: ::embassy_stm32::rcc::PllSource::#src,
+                prediv: ::embassy_stm32::rcc::PllPreDiv::#pre,
+                mul: ::embassy_stm32::rcc::PllMul::#mul,
+                divp: Some(::embassy_stm32::rcc::PllDiv::#divp),
+                divq: None,
+                divr: Some(::embassy_stm32::rcc::PllDiv::#divr),
+            });
+        });
+    }
+    if let Some(sel) = node.prop_str_opt("spi123sel")? {
+        let v = match sel.as_str() {
+            "pll1_q" => quote!(PLL1_Q),
+            "pll2_p" => quote!(PLL2_P),
+            "pll3_p" => quote!(PLL3_P),
+            "per" => quote!(PER),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `spi123sel` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.mux.spi123sel = ::embassy_stm32::rcc::mux::Saisel::#v; });
+    }
+    if let Some(sel) = node.prop_str_opt("adcsel")? {
+        let v = match sel.as_str() {
+            "pll2_p" => quote!(PLL2_P),
+            "pll3_r" => quote!(PLL3_R),
+            "per" => quote!(PER),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `adcsel` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.mux.adcsel = ::embassy_stm32::rcc::mux::Adcsel::#v; });
+    }
+    if let Some(sel) = node.prop_str_opt("sdmmcsel")? {
+        let v = match sel.as_str() {
+            "pll1_q" => quote!(PLL1_Q),
+            "pll2_r" => quote!(PLL2_R),
+            other => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: unsupported `sdmmcsel` `{other}`"),
+                ))
+            }
+        };
+        stmts.push(quote! { config.rcc.mux.sdmmcsel = ::embassy_stm32::rcc::mux::Sdmmcsel::#v; });
     }
     if let Some(voltage) = node.prop_str_opt("voltage")? {
         let v = match voltage.as_str() {
@@ -2146,17 +2388,18 @@ mod tests {
 
     #[test]
     fn intent_h7_400mhz() {
-        let p = plan_h7(400_000_000, Some(48_000_000), None).unwrap();
+        let p = plan_h7(400_000_000, Some(48_000_000), None, None, None, None).unwrap();
         assert_eq!((p.prediv, p.mul, p.divp), (4, 25, 1));
         assert_eq!((p.ahb, p.apb), (2, 2));
         assert!(p.scale1);
         assert!(p.usb48);
         assert!(!p.source_hse);
+        assert!(p.pll2.is_none());
     }
 
     #[test]
     fn intent_h7_550mhz_uses_scale0() {
-        let p = plan_h7(550_000_000, None, None).unwrap();
+        let p = plan_h7(550_000_000, None, None, None, None, None).unwrap();
         assert_eq!((p.prediv, p.mul, p.divp), (32, 275, 1));
         assert!(!p.scale1);
         assert!(!p.usb48);
@@ -2165,10 +2408,49 @@ mod tests {
     #[test]
     fn intent_h7_550mhz_with_hse() {
         // 8 MHz 外部晶振：VCO=550M, prediv=4, mul=275, divp=1。
-        let p = plan_h7(550_000_000, None, Some(8_000_000)).unwrap();
+        let p = plan_h7(550_000_000, None, Some(8_000_000), None, None, None).unwrap();
         assert_eq!((p.prediv, p.mul, p.divp), (4, 275, 1));
         assert!(p.source_hse);
         assert!(!p.scale1);
+    }
+
+    #[test]
+    fn intent_h7_i2s_50mhz() {
+        let p = plan_h7(400_000_000, None, None, Some(50_000_000), None, None).unwrap();
+        assert_eq!(p.pll2, Some((8, 25, 4, 1)));
+        assert_eq!(p.spi123, Some("pll2_p"));
+        assert_eq!(p.sdmmc_sel, None);
+    }
+
+    #[test]
+    fn intent_h7_i2s_and_sdmmc_share_vco() {
+        let p = plan_h7(
+            400_000_000,
+            None,
+            None,
+            Some(50_000_000),
+            None,
+            Some(25_000_000),
+        )
+        .unwrap();
+        // P=50M×4 与 R=25M×8 共用 VCO=200M。
+        assert_eq!(p.pll2, Some((8, 25, 4, 8)));
+        assert_eq!(p.spi123, Some("pll2_p"));
+        assert_eq!(p.sdmmc_sel, Some("pll2_r"));
+    }
+
+    #[test]
+    fn intent_h7_adc_i2s_conflict() {
+        let err = plan_h7(
+            400_000_000,
+            None,
+            None,
+            Some(50_000_000),
+            Some(100_000_000),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("share PLL2_P"));
     }
 
     #[test]

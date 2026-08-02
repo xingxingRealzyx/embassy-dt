@@ -105,21 +105,26 @@ cargo run --offline --example async_init
 ## 设备驱动闭环（v1）
 
 `device` 节点通过 `driver` 属性指定驱动类型后，宏生成 `Board::init_devices()`：
-按依赖序把总线**所有权注入**驱动（v1 限制：一条总线只能被一个设备使用，
-共享总线留待后续）。
+按依赖序把总线注入驱动。总线加 `shared;` 属性后自动生成
+`embassy_sync::Mutex` + `I2cDevice` 共享代理（Clone），一条 I2C 可以挂
+多个设备，驱动无需改动（仍然只是 `impl I2c`）：
 
 ```rust
 // 板级 DTS：
+// i2c0: i2c@... { ...; shared; };
 // bme280: bme@76 {
 //     compatible = "bosch,bme280";
 //     bus = <&i2c0>;
 //     addr = <0x76>;
-//     driver = "embassy_dt_bme280::Bme280<...I2c<'static, Async, Master>>";
+//     driver = "embassy_dt_bme280::Bme280<...I2cDevice<...>>";
+// };
+// bme280b: bme@77 { ...; addr = <0x77>; driver = "同类型"; };
 // };
 
 let board = Board::init(p);
 let mut devices = board.init_devices().await?;   // 总线按依赖序注入设备
 let t = devices.bme280.temperature().await?;
+let t2 = devices.bme280b.temperature().await?;   // 共享同一总线
 ```
 
 驱动约定：类型提供
@@ -230,12 +235,16 @@ cargo check --offline --target thumbv7em-none-eabihf \
 clock {
     system = <400000000>;    // 目标系统时钟（宏自动算 PLL/分频）
     usb = <48000000>;        // USB 48 MHz（可选）
+    i2s = <50000000>;        // H7：SPI1/2/3 内核时钟（PLL2_P）
+    sdmmc = <25000000>;      // H7：SDMMC 时钟（PLL2_R）
     // hse = <8000000>;      // 可选：外部晶振；缺省用内部 HSI
 };
 ```
 
 输入源自动选择：H7 有 `hse` 属性时用外部晶振（可跑到 550 MHz），否则用
 HSI 64 MHz；F4 有 `hse` 时用晶振，否则用 HSI 16 MHz（无晶振板子可用）。
+H7 外设时钟自动规划 PLL2（P 输出给 I2S/SPI/ADC，R 输出给 SDMMC，
+共用一个 VCO；`i2s` 与 `adc` 频率不同会编译报错）。
 
 也保留 v1 显式写法（`source`/`pll1`/`pll`/`sys`/`ahb`/`apb*`/`usb`/
 `clk48`/`voltage`），意图式与显式互斥（混用会编译报错）。

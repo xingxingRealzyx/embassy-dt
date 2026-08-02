@@ -5,9 +5,12 @@
 
 / {
     clock {
-        // 意图式：宏自动计算 PLL（HSI + PLL1 → 400 MHz，HSI48 供 USB）。
+        // 意图式：宏自动计算 PLL。
+        // PLL1 → 400 MHz 系统；HSI48 供 USB；PLL2 → I2S/SPI 与 SDMMC。
         system = <400000000>;
         usb = <48000000>;
+        i2s = <50000000>;
+        sdmmc = <25000000>;
     };
 
     i2c0: i2c@40005400 {
@@ -18,6 +21,7 @@
         dma-tx = "DMA1_CH0";
         dma-rx = "DMA1_CH1";
         frequency = <400000>;
+        shared; // 一条总线多个设备（I2cDevice 共享代理）
     };
 
     spi0: spi@40013000 {
@@ -170,6 +174,13 @@
         compatible = "bosch,bme280";
         bus = <&i2c0>;
         addr = <0x76>;
-        driver = "embassy_dt_bme280::Bme280<embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>";
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
+    };
+
+    bme280b: bme@77 {
+        compatible = "bosch,bme280";
+        bus = <&i2c0>;
+        addr = <0x77>;
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
     };
 };

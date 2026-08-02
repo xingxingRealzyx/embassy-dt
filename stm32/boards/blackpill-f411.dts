@@ -21,6 +21,7 @@
         dma-tx = "DMA1_CH1";
         dma-rx = "DMA1_CH0";
         frequency = <100000>;
+        shared;
     };
 
     led0: led@0 {
@@ -99,6 +100,13 @@
         compatible = "bosch,bme280";
         bus = <&i2c0>;
         addr = <0x76>;
-        driver = "embassy_dt_bme280::Bme280<embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>";
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
+    };
+
+    bme280b: bme@77 {
+        compatible = "bosch,bme280";
+        bus = <&i2c0>;
+        addr = <0x77>;
+        driver = "embassy_dt_bme280::Bme280<embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice<'static, embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex, embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Async, embassy_stm32::i2c::mode::Master>>>";
     };
 };

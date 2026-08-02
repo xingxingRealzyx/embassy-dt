@@ -8,6 +8,7 @@ use defmt::*;
 use defmt_rtt as _;
 use embassy_dt::device_tree;
 use embassy_executor::Spawner;
+use embedded_hal_async::i2c::I2c as _;
 use panic_probe as _;
 
 device_tree! {
@@ -29,7 +30,7 @@ async fn main(_spawner: Spawner) {
     let mut i2c = board.i2c0;
     let mut data = [0u8; 1];
 
-    match i2c.blocking_write_read(ADDRESS, &[WHOAMI], &mut data) {
+    match i2c.write_read(ADDRESS, &[WHOAMI], &mut data).await {
         Ok(()) => info!("Whoami: {}", data[0]),
         Err(e) => error!("I2C Error: {:?}", e),
     }
