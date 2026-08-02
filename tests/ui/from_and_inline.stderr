@@ -1,0 +1,5 @@
+error: cannot combine inline nodes with `from` (use either Rust DSL nodes or a DTS file)
+ --> tests/ui/from_and_inline.rs:6:10
+  |
+6 |     from "boards/x.dts";
+  |          ^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: `uart0` is missing required prop `rx`
+ --> tests/ui/uart_missing_rx.rs:8:9
+  |
+8 |     bus uart0: Uart { periph: "USART1", tx: "PA9", dma_tx: "DMA1_CH4", dma_rx: "DMA1_CH5", baud: 115_200 };
+  |         ^^^^^

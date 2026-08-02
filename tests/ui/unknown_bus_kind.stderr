@@ -1,0 +1,5 @@
+error: unknown bus kind `Can`; expected `I2c`, `Spi` or `Uart`
+ --> tests/ui/unknown_bus_kind.rs:6:12
+  |
+6 |     bus x: Can { periph: "FDCAN1" };
+  |            ^^^

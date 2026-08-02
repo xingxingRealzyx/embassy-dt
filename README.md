@@ -277,6 +277,12 @@ cargo package --offline --no-verify -p embassy-dt-stm32
 cargo test --offline
 cargo test --offline -p embassy-dt-macros
 
+# 编译失败 UI 测试：重复 id / 悬空依赖 / 依赖环 / 未知类型 / 缺 chip / 缺属性
+cargo test --offline -p embassy-dt --test trybuild
+
+# STM32 类型系统拦截测试：错误引脚必须在编译期报 SclPin 错误
+./scripts/compile-fail-stm32.sh
+
 # 宿主端 DTS demo
 cargo run --offline --example demo_dts
 cargo run --offline --example async_init   # DTS → 异步上线引擎

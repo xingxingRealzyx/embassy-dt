@@ -1,0 +1,5 @@
+error: unknown peripheral kind `Foo`; expected `Rng`/`Adc`/`Crc`/`Dac`/`Pwm`/`Can`/`Usb`/`Qei`/`InputCapture`/`Sdmmc`/`I2s`/`PwmInput`/`ComplementaryPwm`
+ --> tests/ui/unknown_periph_kind.rs:6:15
+  |
+6 |     periph x: Foo { periph: "X" };
+  |               ^^^

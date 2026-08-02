@@ -1,0 +1,5 @@
+error: duplicate node id `i2c0`
+ --> tests/ui/duplicate_id.rs:7:9
+  |
+7 |     bus i2c0: I2c { periph: "I2C1", scl: "PB8", sda: "PB7", freq: 400_000 };
+  |         ^^^^

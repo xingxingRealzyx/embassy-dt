@@ -1,0 +1,5 @@
+error: dependency cycle involving node `a`
+ --> tests/ui/cycle.rs:6:12
+  |
+6 |     device a: A { bus: b };
+  |            ^

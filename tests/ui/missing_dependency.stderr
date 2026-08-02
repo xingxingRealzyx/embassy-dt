@@ -1,0 +1,5 @@
+error: node `bme280` depends on unknown node `nope`
+ --> tests/ui/missing_dependency.rs:6:40
+  |
+6 |     device bme280: Bme280Driver { bus: nope, addr: 0x76 };
+  |                                        ^^^^
