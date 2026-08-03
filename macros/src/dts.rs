@@ -78,6 +78,7 @@ pub(crate) fn kind_from_compatible(compatible: &str) -> NodeKindAst {
         "embassy-dt,periph-adc" => NodeKindAst::Peripheral(crate::PeriphKindAst::Adc),
         "embassy-dt,periph-crc" => NodeKindAst::Peripheral(crate::PeriphKindAst::Crc),
         "embassy-dt,periph-dac" => NodeKindAst::Peripheral(crate::PeriphKindAst::Dac),
+        "embassy-dt,periph-cordic" => NodeKindAst::Peripheral(crate::PeriphKindAst::Cordic),
         "embassy-dt,periph-pwm" => NodeKindAst::Peripheral(crate::PeriphKindAst::Pwm),
         "embassy-dt,periph-can" => NodeKindAst::Peripheral(crate::PeriphKindAst::Can),
         "embassy-dt,periph-usb" => NodeKindAst::Peripheral(crate::PeriphKindAst::Usb),

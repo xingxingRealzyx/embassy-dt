@@ -83,6 +83,7 @@ enum PeriphKindAst {
     Adc,
     Crc,
     Dac,
+    Cordic,
     Pwm,
     Can,
     Usb,
@@ -277,6 +278,7 @@ impl Parse for DslNode {
                 "Adc" => PeriphKindAst::Adc,
                 "Crc" => PeriphKindAst::Crc,
                 "Dac" => PeriphKindAst::Dac,
+                "Cordic" => PeriphKindAst::Cordic,
                 "Pwm" => PeriphKindAst::Pwm,
                 "Can" => PeriphKindAst::Can,
                 "Usb" => PeriphKindAst::Usb,
@@ -290,7 +292,7 @@ impl Parse for DslNode {
                     return Err(syn::Error::new(
                         kw_ident.span(),
                         format!(
-                            "unknown peripheral kind `{other}`; expected `Rng`/`Adc`/`Crc`/`Dac`/`Pwm`/`Can`/`Usb`/`Qei`/`InputCapture`/`Sdmmc`/`I2s`/`PwmInput`/`ComplementaryPwm`"
+                            "unknown peripheral kind `{other}`; expected `Rng`/`Adc`/`Crc`/`Dac`/`Cordic`/`Pwm`/`Can`/`Usb`/`Qei`/`InputCapture`/`Sdmmc`/`I2s`/`PwmInput`/`ComplementaryPwm`"
                         ),
                     ))
                 }
@@ -1101,6 +1103,36 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                             #field: ::embassy_stm32::dac::DacChannel::new_blocking(p.#periph, p.#pin),
                         });
                     }
+                    PeriphKindAst::Cordic => {
+                        // Hardware-accelerated trig for FOC: Cos function, 24
+                        // iterations, q1.31, one call returns both sin and cos.
+                        // G4 CORDIC base address is 0x40020C00.
+                        match chip_name(tree)? {
+                            Some(chip) if chip.contains("g4") => {
+                                fields.push(quote! {
+                                    pub #field: ::embassy_stm32::cordic::Cordic<'static, ::embassy_stm32::peripherals::#periph>
+                                });
+                                inits.push(quote! {
+                                    #field: ::embassy_stm32::cordic::Cordic::new(
+                                        p.#periph,
+                                        ::embassy_stm32::cordic::Config::new(
+                                            ::embassy_stm32::cordic::Function::Cos,
+                                            ::embassy_stm32::cordic::Precision::Iters24,
+                                            ::embassy_stm32::cordic::Scale::default(),
+                                        )
+                                        .expect("embassy-dt: invalid CORDIC config")
+                                        .res_count(::embassy_stm32::cordic::AccessCount::Two),
+                                    ),
+                                });
+                            }
+                            _ => {
+                                return Err(syn::Error::new(
+                                    node.id.span(),
+                                    "stm32 backend: `cordic` is not supported for this chip (supported: stm32g4xx)",
+                                ))
+                            }
+                        }
+                    }
                     PeriphKindAst::Pwm => {
                         let ch1 = node.pin_ident_opt("ch1")?;
                         let ch2 = node.pin_ident_opt("ch2")?;
@@ -1429,6 +1461,37 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                         let freq = node
                             .prop_u32_any(&["freq", "frequency"])
                             .unwrap_or(10_000);
+                        // Counting mode: FOC motor control uses center-aligned
+                        // (default stays edge-aligned up). `center-aligned-1/2/3`
+                        // map to CMS1/2/3 (3 = both-direction interrupts, same as
+                        // OxiFOC; the waveform matches the C `CENTERALIGNED1`).
+                        let counting = match node.prop_str_opt("counting")?.as_deref() {
+                            None | Some("edge-aligned-up") => quote!(
+                                ::embassy_stm32::timer::low_level::CountingMode::EdgeAlignedUp
+                            ),
+                            Some("edge-aligned-down") => quote!(
+                                ::embassy_stm32::timer::low_level::CountingMode::EdgeAlignedDown
+                            ),
+                            Some("center-aligned-1") | Some("center-aligned-down") => quote!(
+                                ::embassy_stm32::timer::low_level::CountingMode::CenterAlignedDownInterrupts
+                            ),
+                            Some("center-aligned-2") | Some("center-aligned-up") => quote!(
+                                ::embassy_stm32::timer::low_level::CountingMode::CenterAlignedUpInterrupts
+                            ),
+                            Some("center-aligned-3") | Some("center-aligned-both") => quote!(
+                                ::embassy_stm32::timer::low_level::CountingMode::CenterAlignedBothInterrupts
+                            ),
+                            Some(other) => {
+                                return Err(syn::Error::new(
+                                    node.id.span(),
+                                    format!(
+                                        "complementary-pwm: unsupported `counting` `{other}` \
+                                         (edge-aligned-up / edge-aligned-down / \
+                                         center-aligned-1 / center-aligned-2 / center-aligned-3)"
+                                    ),
+                                ))
+                            }
+                        };
                         fields.push(quote! {
                             pub #field: ::embassy_stm32::timer::complementary_pwm::ComplementaryPwm<'static, ::embassy_stm32::peripherals::#periph>
                         });
@@ -1438,7 +1501,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
                                 #ch1, #ch1n, #ch2, #ch2n,
                                 #ch3, #ch3n, #ch4, #ch4n,
                                 ::embassy_stm32::time::Hertz(#freq),
-                                ::embassy_stm32::timer::low_level::CountingMode::EdgeAlignedUp,
+                                #counting,
                             ),
                         });
                     }
@@ -1750,7 +1813,7 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
     let i2s = clock.prop_u32_any(&["i2s"]);
     let adc = clock.prop_u32_any(&["adc"]);
     let sdmmc = clock.prop_u32_any(&["sdmmc"]);
-    let node = match chip_name(tree)? {
+    let mut node = match chip_name(tree)? {
         Some(chip) if chip.contains("h723") => {
             let plan = plan_h7(sysclk, usb, hse, i2s, adc, sdmmc).map_err(|msg| {
                 syn::Error::new(clock.id.span(), format!("clock: {msg}"))
@@ -1794,6 +1857,48 @@ fn intent_clock(tree: &DslTree, clock: &DslNode, sysclk: u32) -> Result<TokenStr
             ))
         }
     };
+    // Intent mode still allows explicit kernel-clock mux overrides on G4
+    // (fdcan/adc12/adc345). The synthesized node only consumes
+    // system/usb/hse/i2s/adc/sdmmc; user-written mux properties are passed
+    // through so they are not silently dropped (which could leave a
+    // peripheral on a dead default clock).
+    let chip = chip_name(tree)?;
+    if chip.as_deref().map(|c| c.contains("g4")).unwrap_or(false) {
+        let has_can = tree
+            .nodes
+            .iter()
+            .any(|n| matches!(n.kind, NodeKindAst::Peripheral(PeriphKindAst::Can)));
+        // G4's FDCANSEL reset value is HSE. When the tree declares a CAN node
+        // but HSE is disabled and no explicit `fdcan` clock is given, fall back
+        // to PCLK1 automatically so FDCAN init cannot hang on a dead kernel clock.
+        if has_can && hse.is_none() && clock.prop_str_opt("fdcan")?.is_none() {
+            upsert_prop(
+                &mut node,
+                "fdcan",
+                PropValue::Str(LitStr::new("pclk1", Span::call_site())),
+            );
+        }
+        for key in ["fdcan", "adc12", "adc345"] {
+            if let Some(sel) = clock.prop_str_opt(key)? {
+                upsert_prop(
+                    &mut node,
+                    key,
+                    PropValue::Str(LitStr::new(&sel, Span::call_site())),
+                );
+            }
+        }
+        // PLL P/Q dividers are also allowed to mix with intent mode
+        // (e.g. `adc12 = "pll1_p"` for the official FOC ADC clock).
+        for key in ["pllp", "pllq"] {
+            if let Some(v) = clock.prop_u32_any(&[key]) {
+                upsert_prop(
+                    &mut node,
+                    key,
+                    PropValue::U32(LitInt::new(&v.to_string(), Span::call_site())),
+                );
+            }
+        }
+    }
     let stmts = match chip_name(tree)? {
         Some(chip) if chip.contains("h723") => h7_clock_config(&node)?,
         Some(chip) if chip.contains("f411") => f4_clock_config(&node)?,
@@ -2661,6 +2766,12 @@ fn prop(key: &str, value: PropValue) -> DslProp {
     }
 }
 
+/// Set or override a property on a node (deduplicates same-key props).
+fn upsert_prop(node: &mut DslNode, key: &str, value: PropValue) {
+    node.props.retain(|p| p.key != key);
+    node.props.push(prop(key, value));
+}
+
 fn h7_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
     let mut stmts = Vec::new();
 
@@ -3126,7 +3237,10 @@ fn g4_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
         });
     }
     if let Some(pll) = node.prop_array("pll") {
-        // G4：<prediv mul divr>（系统时钟走 PLLR）。
+        // G4: <prediv mul divr> (SYSCLK comes from PLLR).
+        // Optional `pllp` (P divider; official FOC uses DIV8 = 42.5 MHz for
+        // ADC12) and `pllq` (Q divider; official FOC uses DIV2 = 170 MHz for
+        // USB/I2S/SAI/FDCAN backup).
         if pll.len() < 3 {
             return Err(syn::Error::new(
                 node.id.span(),
@@ -3147,13 +3261,39 @@ fn g4_clock_config(node: &DslNode) -> Result<Vec<TokenStream2>> {
                 ))
             }
         };
+        let divp = match node.prop_u32_any(&["pllp"]) {
+            Some(n) if (2..=31).contains(&n) => {
+                let v = format_ident!("DIV{}", n);
+                quote!(Some(::embassy_stm32::rcc::PllPDiv::#v))
+            }
+            Some(n) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: `pllp` must be 2..=31 on G4, got {n}"),
+                ))
+            }
+            None => quote!(None),
+        };
+        let divq = match node.prop_u32_any(&["pllq"]) {
+            Some(n) if [2, 4, 6, 8].contains(&n) => {
+                let v = format_ident!("DIV{}", n);
+                quote!(Some(::embassy_stm32::rcc::PllQDiv::#v))
+            }
+            Some(n) => {
+                return Err(syn::Error::new(
+                    node.id.span(),
+                    format!("clock: `pllq` must be 2/4/6/8 on G4, got {n}"),
+                ))
+            }
+            None => quote!(None),
+        };
         stmts.push(quote! {
             config.rcc.pll = Some(::embassy_stm32::rcc::Pll {
                 source: ::embassy_stm32::rcc::PllSource::#src,
                 prediv: ::embassy_stm32::rcc::PllPreDiv::#pre,
                 mul: ::embassy_stm32::rcc::PllMul::#mul,
-                divp: None,
-                divq: None,
+                divp: #divp,
+                divq: #divq,
                 divr: Some(::embassy_stm32::rcc::PllRDiv::#divr),
             });
         });
@@ -3857,6 +3997,152 @@ mod tests {
     }
 
     #[test]
+    fn stm32_backend_generates_g4_clock_config_pll_pq() {
+        // Official FOC example: HSE 8 MHz, PLLM=2/N=85, PLLR=2 (170 MHz SYSCLK),
+        // PLLP=8 (42.5 MHz for ADC12), PLLQ=2 (170 MHz).
+        let clock = clock_node(&[
+            ("source", PropValue::Str(LitStr::new("hse", Span::call_site()))),
+            ("hse", PropValue::U32(LitInt::new("8000000", Span::call_site()))),
+            ("pll", PropValue::Array(vec![2, 85, 2])),
+            ("pllp", PropValue::U32(LitInt::new("8", Span::call_site()))),
+            ("pllq", PropValue::U32(LitInt::new("2", Span::call_site()))),
+            ("sys", PropValue::Str(LitStr::new("pll1_r", Span::call_site()))),
+            (
+                "adc12",
+                PropValue::Str(LitStr::new("pll1_p", Span::call_site())),
+            ),
+            ("boost", PropValue::Bool(true)),
+        ]);
+        let stmts = g4_clock_config(&clock).unwrap();
+        let tokens = quote!(#(#stmts)*).to_string().replace(' ', "");
+        assert!(tokens.contains("PllSource::HSE"));
+        assert!(tokens.contains("PllPreDiv::DIV2"));
+        assert!(tokens.contains("PllMul::MUL85"));
+        assert!(tokens.contains("divp:Some(::embassy_stm32::rcc::PllPDiv::DIV8)"));
+        assert!(tokens.contains("divq:Some(::embassy_stm32::rcc::PllQDiv::DIV2)"));
+        assert!(tokens.contains("Adcsel::PLL1_P"));
+        assert!(tokens.contains("PllRDiv::DIV2"));
+    }
+
+    #[test]
+    fn intent_g4_pll_pq_passthrough() {
+        // Intent mode allows mixing pllp/pllq with adc12 = "pll1_p"
+        // (official FOC ADC clock).
+        let tree = parse(
+            r#"
+            name "g4-foc";
+            backend stm32;
+            chip "stm32g474re";
+            node clock {
+                system: 170_000_000,
+                pllp: 8,
+                pllq: 2,
+                adc12: "pll1_p",
+            };
+            periph adc0: Adc { periph: "ADC1" };
+        "#,
+        )
+        .unwrap();
+        let tokens = expand(tree).unwrap().to_string().replace(' ', "");
+        assert!(tokens.contains("divp:Some(::embassy_stm32::rcc::PllPDiv::DIV8)"));
+        assert!(tokens.contains("divq:Some(::embassy_stm32::rcc::PllQDiv::DIV2)"));
+        assert!(tokens.contains("Adcsel::PLL1_P"));
+    }
+
+    #[test]
+    fn intent_g4_can_auto_fdcan_pclk1() {
+        // Regression: intent clock + a CAN node in the tree with HSE disabled
+        // must auto-select FDCANSEL=PCLK1, otherwise FDCAN init hangs on the
+        // default HSE kernel clock (found on real hardware).
+        let tree = parse(
+            r#"
+            name "g4-can";
+            backend stm32;
+            chip "stm32g474re";
+            node clock {
+                system: 170_000_000,
+                usb: 48_000_000,
+                adc: 60_000_000,
+            };
+            periph can0: Can { periph: "FDCAN1", rx: "PB8", tx: "PB9" };
+        "#,
+        )
+        .unwrap();
+        let tokens = expand(tree).unwrap().to_string().replace(' ', "");
+        assert!(tokens.contains("Fdcansel::PCLK1"));
+        assert!(tokens.contains("Adcsel::SYS"));
+    }
+
+    #[test]
+    fn intent_g4_user_fdcan_prop_is_preserved() {
+        // When an explicit fdcan clock is given, the synthesized intent node
+        // must preserve the user's choice.
+        let tree = parse(
+            r#"
+            name "g4-can";
+            backend stm32;
+            chip "stm32g474re";
+            node clock {
+                system: 170_000_000,
+                adc: 60_000_000,
+                fdcan: "pll1_q",
+            };
+            periph can0: Can { periph: "FDCAN1", rx: "PB8", tx: "PB9" };
+        "#,
+        )
+        .unwrap();
+        let tokens = expand(tree).unwrap().to_string().replace(' ', "");
+        assert!(tokens.contains("Fdcansel::PLL1_Q"));
+    }
+
+    #[test]
+    fn intent_g4_can_dts_auto_fdcan_pclk1() {
+        // Full DTS-path regression: intent clock + a FDCAN node (the exact
+        // real-hardware scenario) must generate Fdcansel::PCLK1 and
+        // Adcsel::SYS.
+        let dir = std::env::temp_dir()
+            .join(format!("embassy-dt-intent-g4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dts = dir.join("g4-can.dts");
+        std::fs::write(
+            &dts,
+            r#"
+            /dts-v1/;
+            / {
+                model = "G4-Can";
+                clock {
+                    system = <170000000>;
+                    usb = <48000000>;
+                    adc = <60000000>;
+                };
+                can0: can@40006400 {
+                    compatible = "embassy-dt,periph-can";
+                    periph = "FDCAN1";
+                    rx = "PB8";
+                    tx = "PB9";
+                };
+                led0: led@0 {
+                    compatible = "embassy-dt,gpio-out";
+                    pin = "PB0";
+                    level = "low";
+                };
+            };
+            "#,
+        )
+        .unwrap();
+        let input = format!(
+            r#" name "g4-can"; backend stm32; chip "stm32g474re"; from "{}"; "#,
+            dts.display()
+        );
+        let tree = parse(&input).unwrap();
+        let tokens = expand(tree).unwrap().to_string().replace(' ', "");
+        assert!(tokens.contains("Fdcansel::PCLK1"));
+        assert!(tokens.contains("Adcsel::SYS"));
+        assert!(tokens.contains("FDCAN1_IT0"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn intent_f1_72mhz_hse_with_usb() {
         // 8 MHz 晶振：PLL = 8M ÷1 ×9 = 72 MHz（经典 BluePill 配置），
         // USB 由 PLL÷1.5 派生 48 MHz；APB1 ÷2；ADC ÷6 = 12 MHz。
@@ -4155,6 +4441,78 @@ fn clock_node(props: &[(&str, PropValue)]) -> DslNode {
         assert!(tokens.contains("PwmInput::new_ch1"));
         assert!(tokens.contains("ComplementaryPwm::new"));
         assert!(tokens.contains("ComplementaryPwmPin::new"));
+    }
+
+    #[test]
+    fn complementary_pwm_counting_mode() {
+        // FOC motor control: center-aligned (OxiFOC's
+        // CenterAlignedBothInterrupts).
+        let tree = parse(
+            r#"
+            name "foc";
+            backend stm32;
+            chip "stm32g474re";
+            periph pwm_m1: ComplementaryPwm {
+                periph: "TIM1", ch1: "PA8", ch1n: "PB13",
+                ch2: "PA9", ch2n: "PB14", ch3: "PA10", ch3n: "PB15",
+                freq: 16000, counting: "center-aligned-3",
+            };
+        "#,
+        )
+        .unwrap();
+        let tokens = expand(tree).unwrap().to_string().replace(' ', "");
+        assert!(tokens.contains("CountingMode::CenterAlignedBothInterrupts"));
+        assert!(!tokens.contains("CountingMode::EdgeAlignedUp"));
+    }
+
+    #[test]
+    fn complementary_pwm_rejects_bad_counting() {
+        let tree = parse(
+            r#"
+            name "bad";
+            backend stm32;
+            chip "stm32g474re";
+            periph pwm0: ComplementaryPwm { periph: "TIM1", counting: "sideways" };
+        "#,
+        )
+        .unwrap();
+        let err = expand(tree).unwrap_err();
+        assert!(err.to_string().contains("unsupported `counting` `sideways`"));
+    }
+
+    #[test]
+    fn stm32_backend_generates_g4_cordic() {
+        // Hardware-accelerated trig (FOC): Cos function + 24 iterations +
+        // two results.
+        let tree = parse(
+            r#"
+            name "g4-cordic";
+            backend stm32;
+            chip "stm32g474re";
+            periph cordic0: Cordic { periph: "CORDIC" };
+        "#,
+        )
+        .unwrap();
+        let tokens = expand(tree).unwrap().to_string().replace(' ', "");
+        assert!(tokens.contains("Cordic::new"));
+        assert!(tokens.contains("Function::Cos"));
+        assert!(tokens.contains("Precision::Iters24"));
+        assert!(tokens.contains("AccessCount::Two"));
+    }
+
+    #[test]
+    fn cordic_requires_g4_chip() {
+        let tree = parse(
+            r#"
+            name "bad";
+            backend stm32;
+            chip "stm32f411ce";
+            periph cordic0: Cordic { periph: "CORDIC" };
+        "#,
+        )
+        .unwrap();
+        let err = expand(tree).unwrap_err();
+        assert!(err.to_string().contains("`cordic` is not supported for this chip"));
     }
 
     #[test]

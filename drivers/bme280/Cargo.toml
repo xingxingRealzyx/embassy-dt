@@ -11,5 +11,5 @@ documentation = "https://docs.rs/embassy-dt-bme280"
 repository = "https://github.com/xingxingRealzyx/embassy-dt"
 
 [dependencies]
-embassy-dt = { path = "../..", version = "0.1.0" }
+embassy-dt = { path = "../..", version = "0.2.0" }
 embedded-hal-async = "1.0"

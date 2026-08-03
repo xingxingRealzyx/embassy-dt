@@ -1,6 +1,6 @@
 [package]
 name = "embassy-dt-stm32"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ repository = "https://github.com/xingxingRealzyx/embassy-dt"
 readme = "README.md"
 
 [dependencies]
-embassy-dt = { path = "..", version = "0.1.0" }
+embassy-dt = { path = "..", version = "0.2.0" }
 embassy-embedded-hal = "0.6"
 embassy-stm32 = { version = "0.6", default-features = false, features = ["rt", "time-driver-any", "exti"] }
 embassy-sync = "0.8"

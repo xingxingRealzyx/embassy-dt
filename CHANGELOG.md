@@ -3,6 +3,41 @@
 All notable changes to this project are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-08-03
+
+### Added
+
+- **G4 clock: PLL P/Q dividers** (`pllp` / `pllq` properties on the `clock`
+  node). The official STM32 Motor Control SDK FOC clock (HSE 8 MHz, PLLM=2,
+  PLLN=85, PLLP=DIV8 → 42.5 MHz ADC, PLLQ=DIV2, PLLR=DIV2 → 170 MHz SYSCLK)
+  can now be expressed exactly, including `adc12 = "pll1_p"`.
+- **G4 intent-clock passthrough**: explicit `fdcan` / `adc12` / `adc345` /
+  `pllp` / `pllq` properties can be mixed with the intent syntax
+  (`system = <170000000>; ...`) and are forwarded to the synthesized clock node.
+- **G4 FDCAN kernel clock auto-selection**: when the tree declares a CAN node
+  but HSE is disabled and no explicit `fdcan` clock is given, the intent clock
+  now selects `FDCANSEL = PCLK1` automatically. Fixes a real-hardware hang
+  where FDCAN init spun forever on the default (HSE) kernel clock.
+- **Complementary PWM counting modes**: `counting` property on
+  `embassy-dt,periph-complementary-pwm` nodes (`edge-aligned-up` (default) /
+  `edge-aligned-down` / `center-aligned-1` / `center-aligned-2` /
+  `center-aligned-3`), required for FOC motor control.
+- **CORDIC peripheral node**: `embassy-dt,periph-cordic` (G4) generates a
+  `cordic::Cordic` handle configured as Cos function, 24 iterations, two
+  results (q1.31) — the hardware-accelerated sin/cos setup used by FOC loops.
+
+### Fixed
+
+- G4 intent clocks with a CAN node could leave `FDCANSEL` at its reset value
+  (HSE) while HSE was disabled, hanging `Board::init` in the FDCAN wait loop
+  (found and fixed on real hardware, ATK-DMG474).
+
+### Documentation
+
+- README: document complementary PWM `counting` modes, the CORDIC node, the
+  G4 `pllp`/`pllq` dividers and FDCAN auto clock selection; update the
+  real-hardware status and known-limitations list.
+
 ## [0.1.0] - 2026-08-03
 
 ### Core (`embassy-dt`)

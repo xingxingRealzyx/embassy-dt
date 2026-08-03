@@ -170,7 +170,9 @@ shareable.
 | `periph ...: Adc` | `periph` | `adc::Adc<'static, ADC1>` |
 | `periph ...: Crc` | `periph` | `crc::Crc<'static>` |
 | `periph ...: Dac` | `periph` / `pin` (blocking) | `dac::DacChannel<'static, Blocking>` |
+| `periph ...: Cordic` | `periph` (G4) | `cordic::Cordic<'static, CORDIC>` (Cos, 24 iters, 2 results — FOC sin/cos) |
 | `periph ...: Pwm` | `periph` / optional `ch1..ch4` / `freq` | `timer::simple_pwm::SimplePwm<'static, TIM2>` |
+| `periph ...: ComplementaryPwm` | `periph` / optional `ch1..ch4` + `ch1n..ch4n` / `freq` / `counting` | `timer::complementary_pwm::ComplementaryPwm<'static, TIM1>` |
 | `periph ...: Can` | `periph` / `rx` / `tx` | `can::Can<'static>` (H723/G4 FDCAN, F4/F1/F0 bxCAN) |
 | `periph ...: Usb` | `periph` / `dp` / `dm` / `ep_out` | `usb::Driver<'static, USB_OTG_HS/FS>` (endpoint buffers auto-generated) |
 | `periph ...: Qei` | `periph` / `ch1` / `ch2` | `timer::qei::Qei<'static, TIM3>` (quadrature decoder) |
@@ -178,6 +180,10 @@ shareable.
 | `periph ...: Sdmmc` | `periph` / `clk` / `cmd` / `d0` | `sdmmc::Sdmmc<'static>` (H723, 1-bit) |
 | `periph ...: I2s` | `periph` / `sd` / `ws` / `ck` / `dma` / `buffer` | `i2s::I2S<'static, u16>` (TX-only, DMA buffer auto-generated) |
 | `bus ...: Spi` + `mode = "slave"` | extra `cs` | `spi::Spi<'static, Async, Slave>` |
+
+`counting` accepts `edge-aligned-up` (default), `edge-aligned-down` and
+`center-aligned-1/2/3` (CMS1/2/3). FOC motor control uses center-aligned PWM,
+e.g. `frequency = <20000>; counting = "center-aligned-3";`.
 
 The macro generates `bind_interrupts!` (`I2C1_EV/ER`, `USART1`, `DMA1_STREAMn`, ...)
 automatically. Pin alternate functions, DMA compatibility and interrupt bindings are all
@@ -220,8 +226,15 @@ clock {
 Clock input selection is automatic: H7 uses HSE when `hse` is present (up to 550 MHz),
 otherwise HSI 64 MHz; F4 uses HSE when present, otherwise HSI 16 MHz. G4 supports
 170 MHz with automatic boost above 150 MHz, USB from HSI48 and ADC kernel clock from SYS
-(the driver divides automatically; `adc12`/`fdcan`/`clk48` muxes can be overridden
-explicitly).
+(the driver divides automatically). G4-specific behavior:
+
+- `adc12` / `fdcan` / `clk48` muxes and the PLL P/Q dividers (`pllp` / `pllq`)
+  can be mixed with the intent syntax and are passed through to the generated
+  clock config — e.g. the official ST FOC clock:
+  `pllp = <8>; pllq = <2>; adc12 = "pll1_p";`
+- When the tree declares a CAN node but HSE is disabled and no explicit
+  `fdcan` clock is given, `FDCANSEL` is set to `PCLK1` automatically (the reset
+  default is HSE, which would leave FDCAN with no kernel clock and hang init).
 
 ### `rt` feature requirement
 
@@ -280,8 +293,12 @@ variants of CAN/USB/ADC and the BME280 driver loop).
 ## Real-hardware status
 
 - **ATK-DMG474 (STM32G474VET6)**: verified — LED heartbeat on real hardware
-  (`embassy-dt-dmg474` project, 170 MHz, HSI16-based PLL). This bring-up caught and
-  fixed the missing `rt` feature described above.
+  (`embassy-dt-dmg474` project, 170 MHz from the official HSE 8 MHz PLL clock,
+  boost mode). This bring-up caught and fixed the missing `rt` feature and the
+  G4 FDCAN kernel-clock hang described above. The motor-interface-1 device
+  tree (20 kHz center-aligned complementary PWM, TIM1-TRGO2 injected ADC
+  current sampling, CORDIC-accelerated FOC skeleton) is ready and compiles;
+  current-sampling bring-up on the bench is pending.
 - **DM-MC02 (STM32H723VGT6)**: project ready and compiling; hardware bring-up pending
   (the first probe/board combination failed at the SWD physical layer and was set aside).
 - The remaining STM32 examples are cross-compiled only and have not been flashed to
@@ -343,11 +360,11 @@ cargo package --offline --no-verify -p embassy-dt-stm32
 - Device-node driver handle generation is ready for the driver ecosystem to plug in
 - Multi-core / interrupt-level executor and power-management orchestration belong to
   `embassy-supervisor` and are composable
-- Peripherals not yet covered: ETH, SAI/I2S, LTDC/LCD/DSI, QSPI/OSPI/FMC, CORDIC/FMAC,
-  crypto (AES/CRYP/HASH/PKA), advanced-timer modes (complementary PWM / one-pulse),
-  SDMMC 4/8-bit, ADC/DAC async DMA modes, CAN-FD advanced bit timing, I2C slave
-  (not available in embassy-stm32 0.6). The construction is table-driven, so these can
-  be added item by item.
+- Peripherals not yet covered: ETH, SAI/I2S, LTDC/LCD/DSI, QSPI/OSPI/FMC, FMAC,
+  crypto (AES/CRYP/HASH/PKA), advanced-timer one-pulse mode, SDMMC 4/8-bit,
+  ADC/DAC async DMA modes, CAN-FD advanced bit timing, I2C slave (not available
+  in embassy-stm32 0.6). The construction is table-driven, so these can be
+  added item by item.
 
 ## Verification
 

@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "embassy-dt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "embassy-dt-macros",
  "trybuild",
@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "embassy-dt-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "embassy-dt-stm32"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cortex-m-rt",
  "critical-section",
