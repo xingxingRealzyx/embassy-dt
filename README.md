@@ -144,9 +144,10 @@ Driver contract: the type provides
 value in device-tree dependency order. Reference implementation:
 [`drivers/bme280`](drivers/bme280) (a real BME280 driver: reset / ID check / calibration /
 integer-compensated temperature and humidity, with datasheet-example unit tests).
-The BME280 driver is **not published** to crates.io; on the STM32 backend its examples
-are gated behind the optional `bme280` feature so publishing the backend never depends
-on it.
+The BME280 driver is **not published** to crates.io, and the STM32 backend does not
+depend on it, so the publish chain stays clean. The driver and its STM32 demo examples
+live in this repository as reference code; a separate unpublished demo crate may wire
+them back up later.
 
 **Shared SPI** works the same way: `shared;` on a SPI bus, each device declares its own
 `cs = <&cs-node>`; the macro generates an `SpiDevice` that drives CS low during a

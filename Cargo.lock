@@ -293,7 +293,6 @@ dependencies = [
  "defmt 1.1.1",
  "defmt-rtt",
  "embassy-dt",
- "embassy-dt-bme280",
  "embassy-embedded-hal",
  "embassy-executor",
  "embassy-futures",
