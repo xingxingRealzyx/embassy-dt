@@ -13,6 +13,7 @@ keywords = ["embassy", "embedded", "async", "device-tree", "no-std"]
 categories = ["embedded", "no-std"]
 readme = "README.md"
 documentation = "https://docs.rs/embassy-dt"
+repository = "https://github.com/xingxingRealzyx/embassy-dt"
 
 [dependencies]
 embassy-dt-macros = { path = "macros", version = "0.1.0" }

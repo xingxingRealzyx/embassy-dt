@@ -2,12 +2,13 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
-//! BME280 温湿度传感器驱动（遵循 embassy-dt 设备树初始化约定）。
+//! BME280 temperature/humidity sensor driver following the `embassy-dt` device-tree
+//! initialization convention.
 //!
-//! 约定：驱动类型提供
-//! `async fn init(deps..., &NodeDesc) -> Result<Self, DeviceError>`，
-//! 其中 deps 按设备树中的依赖顺序按值传入。本驱动的签名是
-//! `Bme280::init(i2c, node)`，需要的属性：`addr`（7 位 I2C 地址）。
+//! Convention: a driver type provides
+//! `async fn init(deps..., &NodeDesc) -> Result<Self, DeviceError>`, where deps are
+//! passed by value in device-tree dependency order. This driver's signature is
+//! `Bme280::init(i2c, node)`; the required property is `addr` (7-bit I2C address).
 //!
 //! ```text
 //! device bme280: Bme280Driver { bus: i2c0, addr: 0x76 };

@@ -1,10 +1,17 @@
 # embassy-dt-macros
 
-`embassy-dt` 的过程宏：`device_tree!`。
+Procedural macros for [`embassy-dt`](https://docs.rs/embassy-dt): the `device_tree!` DSL.
 
-- 解析 Rust DSL 或 `.dts` / `.dtsi` 文件（含 `#include`、overlay 合并）
-- 编译期校验：重复 id、悬空依赖、依赖环
-- `backend stm32;` 时生成类型化 `Board`（支持 I2C/SPI/UART/GPIO/
-  RNG/ADC/CRC/DAC/PWM/CAN/USB/I2S/QEI/输入捕获/SDMMC 等）
+What it provides:
 
-完整文档见 [embassy-dt](https://docs.rs/embassy-dt)。
+- Parsing of the Rust DSL **and** real `.dts` / `.dtsi` files (recursive `#include`,
+  overlay merging, `/delete-node/`, `/delete-property/`) and `.dtb` binaries
+- Compile-time validation: duplicate ids, dangling dependencies, dependency cycles,
+  unknown node types, missing required properties, conflicting clock styles
+- With `backend stm32;`: typed `Board` code generation for I2C/SPI/UART/GPIO/
+  RNG/ADC/CRC/DAC/PWM/CAN/USB/I2S/QEI/input capture/SDMMC, plus `clock_config()`
+  intent-based clock planning and automatic `bind_interrupts!`
+- Error reporting with `file:line:column` locations for `.dts` input
+
+Full documentation: [`embassy-dt`](https://docs.rs/embassy-dt).
+

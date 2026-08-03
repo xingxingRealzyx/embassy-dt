@@ -2,22 +2,26 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! 给 Embassy 的异步设备树（Async Device Tree）。
+//! An async device tree for [Embassy](https://github.com/embassy-rs/embassy).
 //!
-//! 目标：把「硬件长什么样」与「应用逻辑」分离——硬件配置（总线、引脚、
-//! 设备、依赖关系）写成一份静态描述，由 chip 后端翻译成具体的 Embassy HAL
-//! 调用；应用代码只面向树编程，换板子/换芯片时不用改逻辑。
+//! The goal: separate *what the hardware looks like* from *what the application
+//! does*. Hardware configuration (buses, pins, devices, dependencies) is written once
+//! as a static description; a chip backend translates it into concrete Embassy HAL
+//! calls. Application code only programs against the tree, so changing boards or chips
+//! does not require changing logic.
 //!
-//! 三个组成部分：
+//! Three parts:
 //!
-//! - [`device_tree!`]（来自 `embassy-dt-macros`）：DSL 宏，解析树配置并做
-//!   **编译期校验**（重复 id、悬空依赖、依赖环）；声明 `backend stm32;`
-//!   时还会生成类型化的 `Board` 结构。
-//! - [`TreeDesc`]：纯静态、`no_std` 的设备树描述模型（节点、总线、设备、
-//!   属性、依赖），以及校验和拓扑排序。
-//! - [`init_devices`]：按依赖序异步上线设备的引擎，零堆分配。
+//! - [`device_tree!`] (from `embassy-dt-macros`): the DSL macro that parses tree
+//!   configuration and performs **compile-time validation** (duplicate ids, dangling
+//!   dependencies, dependency cycles); declaring `backend stm32;` additionally
+//!   generates a typed `Board` structure.
+//! - [`TreeDesc`]: the purely static, `no_std` device-tree description model (nodes,
+//!   buses, devices, properties, dependencies) with validation and topological sort.
+//! - [`init_devices`]: the engine that asynchronously brings devices up in dependency
+//!   order, with zero heap allocation.
 //!
-//! 示例（宿主端）：
+//! Example (host side):
 //!
 //! ```rust
 //! use embassy_dt::device_tree;

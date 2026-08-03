@@ -2,18 +2,22 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! `embassy-dt` 的 STM32 后端。
+//! The STM32 backend for [`embassy-dt`](https://docs.rs/embassy-dt).
 //!
-//! 当前支持：
+//! Supported chips (one feature per build):
 //!
-//! - **STM32H723ZG**（`stm32h723zg` feature，默认开启，Nucleo-H723ZI）
-//! - **STM32F411CE**（`stm32f411ce` feature，WeAct BlackPill）
+//! - `stm32h723zg` (default) / `stm32h723vg` (H7)
+//! - `stm32f411ce` (F4)
+//! - `stm32l476rg` (L4)
+//! - `stm32g474re` / `stm32g474ve` (G4)
+//! - `stm32f103c8` / `stm32f103re` (F1)
+//! - `stm32f072rb` (F0)
 //!
-//! ## 使用
+//! ## Usage
 //!
-//! 推荐用 `.dts` / `.dtsi` 文件描述硬件：芯片级 dtsi 复用，板级 dts 做
-//! overlay 覆盖。在 `device_tree!` 中声明 `backend stm32;`，宏会额外生成
-//! 类型化的 `Board` 结构：
+//! Describe the hardware with `.dts` / `.dtsi` files: chip-level `.dtsi` is shared, and
+//! board-level `.dts` overlays the differences. Declaring `backend stm32;` in
+//! `device_tree!` generates a typed `Board` structure:
 //!
 //! ```rust,ignore
 //! use embassy_dt::device_tree;
@@ -21,22 +25,27 @@
 //! device_tree! {
 //!     name "my-board";
 //!     backend stm32;
+//!     chip "stm32h723zg";
 //!     from "boards/my-board.dts";
 //! }
 //!
-//! // 应用代码：
+//! // Application code:
 //! // #[embassy_executor::main]
 //! // async fn main(_s: Spawner) {
-//! //     let board = Board::init(embassy_stm32::init(Default::default()));
+//! //     let board = Board::init(embassy_stm32::init(clock_config()));
 //! //     app::heartbeat(&mut board.led0).await;
 //! // }
 //! ```
 //!
-//! 引脚与外设的 AF 兼容性由 embassy-stm32 的类型系统在编译期保证：
-//! 例如 `PB8` 若不是 `I2C1` 的合法 SCL 引脚，代码直接编译不过。
+//! Pin/peripheral AF compatibility is guaranteed at compile time by the
+//! `embassy-stm32` type system: for example, if `PB8` is not a legal I2C1 SCL pin, the
+//! code simply does not compile.
 //!
-//! 支持的节点：`I2c` / `Spi` / `Uart`（async + DMA）与 `gpio Out/In`。
-//! 完整示例见 `examples/`（三块板子共享 `examples/common/app.rs`）。
+//! Supported nodes: `I2c` / `Spi` / `Uart` (async + DMA, including shared buses),
+//! `gpio Out/In/Pin` (EXTI async inputs), and peripherals `Rng` / `Adc` / `Crc` /
+//! `Dac` / `Pwm` / `Can` / `Usb` / `Qei` / `InputCapture` / `Sdmmc` / `I2s` /
+//! `PwmInput` / `ComplementaryPwm`, plus intent-based clock configuration. Complete
+//! examples live in the repository `examples/` directory.
 
 pub mod f411;
 pub mod h723;

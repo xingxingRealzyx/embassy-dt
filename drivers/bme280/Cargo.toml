@@ -8,6 +8,7 @@ description = "BME280 temperature/humidity driver following the embassy-dt devic
 keywords = ["embassy", "embedded", "bme280", "async", "sensor", "device-tree"]
 categories = ["embedded", "no-std"]
 documentation = "https://docs.rs/embassy-dt-bme280"
+repository = "https://github.com/xingxingRealzyx/embassy-dt"
 
 [dependencies]
 embassy-dt = { path = "../..", version = "0.1.0" }

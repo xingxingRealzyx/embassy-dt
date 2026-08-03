@@ -1,12 +1,12 @@
-//! `embassy-dt` 的过程宏：`device_tree!`。
+//! The procedural macro crate for `embassy-dt`: `device_tree!`.
 //!
-//! 两种配置来源：
+//! Two configuration sources:
 //!
 //! ```text
 //! // 1) Rust DSL
 //! device_tree! {
-//!     name "board-name";                // 可选，默认取 DTS model / "board"
-//!     backend stm32;                    // 可选；额外生成 STM32 类型化 Board
+//!     name "board-name";                // optional; defaults to the DTS model / "board"
+//!     backend stm32;                    // optional; additionally generates the typed STM32 Board
 //!     bus i2c0: I2c { periph: "I2C1", scl: "PB8", sda: "PB7", freq: 400_000 };
 //!     bus uart0: Uart { periph: "USART1", rx: "PA10", tx: "PA9", baud: 115_200 };
 //!     gpio led0: Out { pin: "PC13", level: "high" };
@@ -14,7 +14,7 @@
 //!     device bme280: Bme280Driver { bus: i2c0, addr: 0x76 };
 //! }
 //!
-//! // 2) DTS/DTSI 文件（推荐，支持 #include 与板级 overlay 合并）
+//! // 2) DTS/DTSI files (recommended; supports #include and board-level overlay merging)
 //! device_tree! {
 //!     name "nucleo-h723zi";
 //!     backend stm32;
@@ -23,9 +23,11 @@
 //! }
 //! ```
 //!
-//! `chip` 用于芯片相关的代码生成规则（如 ADC/CRC/CAN 的构造差异）。
+//! `chip` selects chip-specific code generation rules (e.g. ADC/CRC/CAN construction
+//! differences).
 //!
-//! 宏在编译期校验：重复 id、悬空依赖、依赖环，全部直接 `compile_error!`。
+//! The macro validates at compile time: duplicate ids, dangling dependencies and
+//! dependency cycles all become direct `compile_error!`s.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -620,7 +622,7 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
     // 模块级 static（如 USB 端点缓冲）。
     let mut statics = Vec::new();
     // 中断绑定条目，按中断名去重。
-    let mut bindings: Vec<(String, TokenStream2)> = Vec::new();
+    let mut bindings: Vec<(String, Vec<TokenStream2>)> = Vec::new();
     // 需要实例化的设备（driver 类型来自 DSL）。
     let mut devices: Vec<(&DslNode, &Path)> = Vec::new();
 
@@ -1499,10 +1501,17 @@ fn stm32_board(tree: &DslTree) -> Result<TokenStream2> {
         ));
     }
 
-    let irqs = bindings.iter().map(|(irq, handler)| {
+    let irqs = bindings.iter().map(|(irq, handlers)| {
         let irq = format_ident!("{}", irq);
+        let mut merged = TokenStream2::new();
+        for (i, handler) in handlers.iter().enumerate() {
+            if i > 0 {
+                merged.extend(quote!(,));
+            }
+            merged.extend(handler.clone());
+        }
         quote! {
-            #irq => #handler;
+            #irq => #merged;
         }
     });
 
@@ -3444,6 +3453,9 @@ fn stream_irq(channel: &str, node: &DslNode, chip: Option<&str>) -> Result<Ident
     {
         // L4/G4/F1：通道类型 `DMA1_CH1`，中断名 `DMA1_CHANNEL1`。
         channel.replace("_CH", "_CHANNEL")
+    } else if channel.starts_with("BDMA_CH") {
+        // H7 的 BDMA：通道类型 `BDMA_CH0`，中断向量 `BDMA_CHANNEL0`。
+        channel.replace("_CH", "_CHANNEL")
     } else if channel.contains("_CH") {
         channel.replace("_CH", "_STREAM")
     } else {
@@ -3463,7 +3475,7 @@ fn stream_irq(channel: &str, node: &DslNode, chip: Option<&str>) -> Result<Ident
 }
 
 fn push_dma_bindings(
-    bindings: &mut Vec<(String, TokenStream2)>,
+    bindings: &mut Vec<(String, Vec<TokenStream2>)>,
     channel: &str,
     channel_ident: &Ident,
     node: &DslNode,
@@ -3475,14 +3487,18 @@ fn push_dma_bindings(
     Ok(())
 }
 
-fn push_binding(bindings: &mut Vec<(String, TokenStream2)>, irq: Ident, handler: TokenStream2) {
+fn push_binding(bindings: &mut Vec<(String, Vec<TokenStream2>)>, irq: Ident, handler: TokenStream2) {
     let name = irq.to_string();
-    // 多个中断信号合并到同一向量时（F0 的 DMA 组、CEC_CAN、I2C1 单中断），
-    // 把 handler 合并到同一行（bind_interrupts 支持 `IRQ => h1, h2;`）。
+    // 多个中断信号合并到同一向量时（F0 的 DMA 组、CEC_CAN、I2C1 单中断、
+    // 同组 EXTI 引脚），把 handler 合并到同一行（bind_interrupts 支持
+    // `IRQ => h1, h2;`）；相同 handler 只保留一份（同组 EXTI 引脚）。
+    let key = handler.to_string();
     if let Some((_, existing)) = bindings.iter_mut().find(|(n, _)| *n == name) {
-        existing.extend(quote!(, #handler));
+        if !existing.iter().any(|h| h.to_string() == key) {
+            existing.push(handler);
+        }
     } else {
-        bindings.push((name, handler));
+        bindings.push((name, vec![handler]));
     }
 }
 

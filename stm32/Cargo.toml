@@ -8,20 +8,23 @@ description = "STM32 backend for embassy-dt (async device tree for Embassy)."
 keywords = ["embassy", "embedded", "async", "device-tree", "stm32"]
 categories = ["embedded", "no-std"]
 documentation = "https://docs.rs/embassy-dt-stm32"
+repository = "https://github.com/xingxingRealzyx/embassy-dt"
 readme = "README.md"
 
 [dependencies]
 embassy-dt = { path = "..", version = "0.1.0" }
 embassy-embedded-hal = "0.6"
-embassy-stm32 = { version = "0.6", default-features = false, features = ["time-driver-any", "exti"] }
+embassy-stm32 = { version = "0.6", default-features = false, features = ["rt", "time-driver-any", "exti"] }
 embassy-sync = "0.8"
 
 [features]
 default = ["stm32h723zg"]
 stm32h723zg = ["embassy-stm32/stm32h723zg"]
+stm32h723vg = ["embassy-stm32/stm32h723vg"]
 stm32f411ce = ["embassy-stm32/stm32f411ce"]
 stm32l476rg = ["embassy-stm32/stm32l476rg"]
 stm32g474re = ["embassy-stm32/stm32g474re", "embassy-stm32/single-bank"]
+stm32g474ve = ["embassy-stm32/stm32g474ve", "embassy-stm32/single-bank"]
 stm32f103c8 = ["embassy-stm32/stm32f103c8"]
 stm32f103re = ["embassy-stm32/stm32f103re"]
 stm32f072rb = ["embassy-stm32/stm32f072rb"]
