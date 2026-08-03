@@ -144,6 +144,9 @@ Driver contract: the type provides
 value in device-tree dependency order. Reference implementation:
 [`drivers/bme280`](drivers/bme280) (a real BME280 driver: reset / ID check / calibration /
 integer-compensated temperature and humidity, with datasheet-example unit tests).
+The BME280 driver is **not published** to crates.io; on the STM32 backend its examples
+are gated behind the optional `bme280` feature so publishing the backend never depends
+on it.
 
 **Shared SPI** works the same way: `shared;` on a SPI bus, each device declares its own
 `cs = <&cs-node>`; the macro generates an `SpiDevice` that drives CS low during a
@@ -297,6 +300,9 @@ cargo publish -p embassy-dt          # core (depends on the macros)
 cargo publish -p embassy-dt-stm32    # STM32 backend (chip HAL cannot build on the host:
                                      # use cargo publish --no-verify)
 ```
+
+`embassy-dt-bme280` (drivers/bme280) is an optional demo driver and is **not part of
+the publish chain**.
 
 Local package verification:
 

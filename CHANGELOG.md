@@ -71,6 +71,8 @@ crates.io yet; all changes accumulate under `[Unreleased]`.
 - **Fixed**: enable `embassy-stm32/rt` in the backend dependency so interrupt vectors
   (including the time-driver timer ISR) are actually compiled; without it, every
   `Timer::after_*` await hangs. Found during real-hardware bring-up.
+- The BME280 driver is an optional dependency of the backend (`bme280` feature) and is
+  not part of the crates.io publish chain.
 
 ### Drivers (`embassy-dt-bme280`)
 

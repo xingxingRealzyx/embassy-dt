@@ -13,6 +13,7 @@ readme = "README.md"
 
 [dependencies]
 embassy-dt = { path = "..", version = "0.1.0" }
+embassy-dt-bme280 = { path = "../drivers/bme280", version = "0.1.0", optional = true }
 embassy-embedded-hal = "0.6"
 embassy-stm32 = { version = "0.6", default-features = false, features = ["rt", "time-driver-any", "exti"] }
 embassy-sync = "0.8"
@@ -21,6 +22,7 @@ embassy-sync = "0.8"
 default = ["stm32h723zg"]
 stm32h723zg = ["embassy-stm32/stm32h723zg"]
 stm32h723vg = ["embassy-stm32/stm32h723vg"]
+bme280 = ["dep:embassy-dt-bme280"]
 stm32f411ce = ["embassy-stm32/stm32f411ce"]
 stm32l476rg = ["embassy-stm32/stm32l476rg"]
 stm32g474re = ["embassy-stm32/stm32g474re", "embassy-stm32/single-bank"]
@@ -40,7 +42,6 @@ embedded-hal-async = "1"
 embassy-executor = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
 embassy-time = "0.5"
 embassy-usb = { version = "0.6", features = ["defmt"] }
-embassy-dt-bme280 = { path = "../drivers/bme280" }
 panic-probe = "1"
 usbd-hid = "0.10"
 
@@ -149,11 +150,11 @@ required-features = ["stm32f411ce"]
 
 [[example]]
 name = "h723_driver_bme280"
-required-features = ["stm32h723zg"]
+required-features = ["stm32h723zg", "bme280"]
 
 [[example]]
 name = "f411_driver_bme280"
-required-features = ["stm32f411ce"]
+required-features = ["stm32f411ce", "bme280"]
 
 [[example]]
 name = "l476_nucleo"
@@ -161,7 +162,7 @@ required-features = ["stm32l476rg"]
 
 [[example]]
 name = "l476_driver_bme280"
-required-features = ["stm32l476rg"]
+required-features = ["stm32l476rg", "bme280"]
 
 [[example]]
 name = "g474_nucleo"
@@ -169,7 +170,7 @@ required-features = ["stm32g474re"]
 
 [[example]]
 name = "g474_driver_bme280"
-required-features = ["stm32g474re"]
+required-features = ["stm32g474re", "bme280"]
 
 [[example]]
 name = "g474_embassy_can"
@@ -189,7 +190,7 @@ required-features = ["stm32f103c8"]
 
 [[example]]
 name = "f103_driver_bme280"
-required-features = ["stm32f103c8"]
+required-features = ["stm32f103c8", "bme280"]
 
 [[example]]
 name = "f103_embassy_can"
@@ -209,7 +210,7 @@ required-features = ["stm32f072rb"]
 
 [[example]]
 name = "f072_driver_bme280"
-required-features = ["stm32f072rb"]
+required-features = ["stm32f072rb", "bme280"]
 
 [[example]]
 name = "f072_embassy_can"
